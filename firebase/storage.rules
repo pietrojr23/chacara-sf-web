@@ -1,0 +1,49 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUser() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isOwner() {
+      return signedIn() && currentUser().isOwner == true;
+    }
+
+    function sameHouse(casaId) {
+      return signedIn() && currentUser().casaId == casaId;
+    }
+
+    match /chamados/{userId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner() || (signedIn() && request.auth.uid == userId);
+    }
+
+    match /avisos/{userId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    match /visitantes/{userId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner() || (signedIn() && request.auth.uid == userId);
+    }
+
+    match /documentos/{casaId}/{allPaths=**} {
+      allow read: if isOwner() || sameHouse(casaId);
+      allow write: if isOwner();
+    }
+
+    match /configuracoes/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

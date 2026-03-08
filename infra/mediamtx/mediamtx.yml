@@ -1,0 +1,46 @@
+# MediaMTX - RTSP -> HLS (para tocar dentro do app)
+# Guia completo: infra/mediamtx/README.md
+
+logLevel: info
+
+# Protocolos habilitados
+rtsp: yes
+hls: yes
+api: yes
+
+# Enderecos
+rtspAddress: :8554
+hlsAddress: :8888
+apiAddress: :9997
+
+# Melhor para app mobile (deixa o HLS pronto continuamente)
+hlsAlwaysRemux: yes
+# Melhor compatibilidade com players Android (ExoPlayer/MediaPlayer)
+hlsVariant: mpegts
+
+# Autenticacao interna (troque as senhas)
+authMethod: internal
+authInternalUsers:
+  # Permite leitura HLS sem credencial para paths de camera (evita falha de auth em alguns players Android).
+  # Se quiser mais restrito, troque ips para sua rede local (ex: ['192.168.1.0/24']).
+  - user: any
+    pass:
+    permissions:
+      - action: read
+        path: "~^cam-.*$"
+      - action: playback
+        path: "~^cam-.*$"
+  - user: admin
+    pass: admin
+    permissions:
+      - action: api
+      - action: metrics
+      - action: playback
+
+# Uma path por camera
+# Troque RTSP de cada camera abaixo.
+paths:
+  cam-casa-01-frente:
+    source: rtsp://pietrojr2:guglielmi007310899@192.168.1.28:554/stream2
+    sourceOnDemand: yes
+    rtspTransport: tcp

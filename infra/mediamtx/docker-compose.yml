@@ -1,0 +1,13 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554" # RTSP (entrada da camera)
+      - "8888:8888" # HLS (saida para app)
+      - "9997:9997" # API (opcional)
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    command: /mediamtx.yml
+

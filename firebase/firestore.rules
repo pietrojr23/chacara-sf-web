@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function currentUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserExists() {
+      return signedIn() && exists(currentUserPath());
+    }
+
+    function currentUser() {
+      return get(currentUserPath()).data;
+    }
+
+    function isOwner() {
+      return currentUserExists() && (
+        currentUser().isOwner == true ||
+        currentUser().isOwner == 'true' ||
+        currentUser().role == 'owner'
+      );
+    }
+
+    function sameHouse(casaId) {
+      return currentUserExists() && currentUser().casaId == casaId;
+    }
+
+    match /users/{userId} {
+      allow read: if (signedIn() && request.auth.uid == userId) || isOwner();
+      allow create: if (signedIn() && request.auth.uid == userId) || isOwner();
+      allow update: if (signedIn() && request.auth.uid == userId) || isOwner();
+      allow delete: if isOwner();
+    }
+
+    match /casas/{casaId} {
+      allow read: if isOwner() || sameHouse(casaId);
+      allow write: if isOwner();
+    }
+
+    match /alugueis/{casaId}/pagamentos/{mes} {
+      allow read: if isOwner() || sameHouse(casaId);
+      allow create, update: if isOwner() || sameHouse(casaId);
+      allow delete: if isOwner();
+    }
+
+    match /chamados/{chamadoId} {
+      allow read: if isOwner() || (signedIn() && resource.data.casaId == currentUser().casaId);
+      allow create: if isOwner() || (signedIn() && request.resource.data.criadorId == request.auth.uid && request.resource.data.casaId == currentUser().casaId);
+      allow update: if isOwner() || (signedIn() && resource.data.criadorId == request.auth.uid);
+      allow delete: if isOwner();
+    }
+
+    match /avisos/{avisoId} {
+      allow read: if isOwner() || (signedIn() && (resource.data.alvoCasaId == null || resource.data.alvoCasaId == currentUser().casaId));
+      allow create, update, delete: if isOwner();
+    }
+
+    match /chat/geral/mensagens/{msgId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.enviadoPor == request.auth.uid;
+      allow update: if signedIn();
+      allow delete: if isOwner();
+    }
+
+    match /chat/privado/{chatId}/mensagens/{msgId} {
+      allow read: if signedIn() && (isOwner() || chatId.matches('.*' + request.auth.uid + '.*'));
+      allow create: if signedIn() && request.resource.data.enviadoPor == request.auth.uid && (isOwner() || chatId.matches('.*' + request.auth.uid + '.*'));
+      allow update: if signedIn() && (isOwner() || chatId.matches('.*' + request.auth.uid + '.*'));
+      allow delete: if isOwner();
+    }
+
+    match /visitantes/{visitanteId} {
+      allow read: if isOwner() || (signedIn() && resource.data.moradorId == request.auth.uid);
+      allow create: if isOwner() || (signedIn() && request.resource.data.moradorId == request.auth.uid);
+      allow update: if isOwner() || (signedIn() && resource.data.moradorId == request.auth.uid);
+      allow delete: if isOwner();
+    }
+
+    match /documentos/{casaId}/docs/{docId} {
+      allow read: if isOwner() || sameHouse(casaId);
+      allow write: if isOwner();
+    }
+
+    match /contatosEmergencia/{contactId} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    match /acessos/{accessId} {
+      allow read: if isOwner() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn();
+      allow update, delete: if isOwner();
+    }
+
+    match /configuracoes/{configId} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
