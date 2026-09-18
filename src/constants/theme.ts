@@ -17,6 +17,23 @@ export const palette = {
   gray100: '#EFF2EF',
 };
 
+export const darkPalette = {
+  greenDark: '#6FAE66',
+  greenPrimary: '#8BC981',
+  greenLight: '#A9DD9F',
+  sand: '#121612',
+  white: '#1E241D',
+  gold: '#D4AF37',
+  danger: '#EF5350',
+  warning: '#F9A825',
+  info: '#64B5F6',
+  gray900: '#F4F7F4',
+  gray700: '#C7D0C6',
+  gray500: '#9AA39A',
+  gray300: '#4A5648',
+  gray100: '#2A3229',
+};
+
 export const spacing = {
   xs: 4,
   sm: 8,
@@ -34,10 +51,29 @@ export const radii = {
   pill: 999,
 };
 
+export const typography = {
+  size: {
+    caption: 12,
+    body: 15,
+    bodyLg: 16,
+    subtitle: 20,
+    title: 30,
+    hero: 38,
+  },
+  weight: {
+    regular: '400' as const,
+    medium: '500' as const,
+    semibold: '600' as const,
+    bold: '700' as const,
+    heavy: '800' as const,
+  },
+};
+
 export const appTheme = {
   colors: palette,
   spacing,
   radii,
+  typography,
 };
 
 export const navLightTheme: Theme = {
@@ -57,11 +93,11 @@ export const navDarkTheme: Theme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    primary: palette.greenLight,
-    background: '#121612',
-    card: '#1E241D',
-    text: '#F4F7F4',
-    border: '#2F362E',
+    primary: darkPalette.greenLight,
+    background: darkPalette.sand,
+    card: darkPalette.white,
+    text: darkPalette.gray900,
+    border: darkPalette.gray300,
     notification: palette.warning,
   },
 };

@@ -14,6 +14,10 @@ import {
 import { getFirebaseDb } from './firebase';
 
 type NotificationTopic = 'avisos' | 'chamados' | 'financeiro' | 'chat' | 'visitantes';
+type ActiveChatNotificationContext = {
+  chatId: string;
+  isPrivate: boolean;
+} | null;
 
 interface SendPushToUsersParams {
   topic: NotificationTopic;
@@ -26,6 +30,8 @@ interface SendPushToUsersParams {
 const db = getFirebaseDb();
 const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 const MAX_MESSAGES_PER_REQUEST = 100;
+const PUSH_REGISTRATION_DEBUG_VERSION = 1;
+let activeChatContext: ActiveChatNotificationContext = null;
 
 const defaultNotificationFlags: Record<NotificationTopic, boolean> = {
   avisos: true,
@@ -35,13 +41,68 @@ const defaultNotificationFlags: Record<NotificationTopic, boolean> = {
   visitantes: true,
 };
 
+const isValidUuid = (value: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+const parseBoolean = (value: unknown) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'sim'].includes(normalized);
+};
+
+const normalizeChatId = (value: unknown) => {
+  const chatId = String(value ?? '').trim();
+  return chatId || 'geral';
+};
+
+export const setActiveChatNotificationContext = (context: ActiveChatNotificationContext) => {
+  if (!context) {
+    activeChatContext = null;
+    return;
+  }
+
+  activeChatContext = {
+    chatId: normalizeChatId(context.chatId),
+    isPrivate: Boolean(context.isPrivate),
+  };
+};
+
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const type = String(data.type ?? '').trim().toLowerCase();
+    const topic = String(data.topic ?? '').trim().toLowerCase();
+    const isChatNotification = type === 'chat_message' || type === 'chat' || topic === 'chat';
+
+    if (isChatNotification && activeChatContext) {
+      const notificationChatId = normalizeChatId(data.chatId);
+      const notificationIsPrivate =
+        parseBoolean(data.isPrivate) || (notificationChatId !== 'geral' && notificationChatId !== 'global');
+
+      const sameChat =
+        activeChatContext.chatId === notificationChatId
+        && activeChatContext.isPrivate === notificationIsPrivate;
+
+      if (sameChat) {
+        return {
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+          shouldShowBanner: false,
+          shouldShowList: false,
+        };
+      }
+    }
+
+    return {
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    };
+  },
 });
 
 const getExpoProjectId = () => {
@@ -50,12 +111,54 @@ const getExpoProjectId = () => {
     easConfig?: { projectId?: string };
   });
 
+  const normalizeCandidate = (value?: string | null) => {
+    const candidate = String(value ?? '').trim();
+    if (!candidate) {
+      return undefined;
+    }
+
+    // Ignora placeholders comuns no .env para não bloquear fallback válido.
+    if (['...', 'undefined', 'null', 'changeme', 'replace-me'].includes(candidate.toLowerCase())) {
+      return undefined;
+    }
+
+    if (!isValidUuid(candidate)) {
+      return undefined;
+    }
+
+    return candidate;
+  };
+
   return (
-    process.env.EXPO_PUBLIC_EXPO_PROJECT_ID
-    || extraRef.easConfig?.projectId
-    || extraRef.expoConfig?.extra?.eas?.projectId
+    normalizeCandidate(process.env.EXPO_PUBLIC_EXPO_PROJECT_ID)
+    || normalizeCandidate(extraRef.easConfig?.projectId)
+    || normalizeCandidate(extraRef.expoConfig?.extra?.eas?.projectId)
     || undefined
   );
+};
+
+const getExpoPushTokenWithFallback = async () => {
+  const projectId = getExpoProjectId();
+
+  if (projectId) {
+    try {
+      return {
+        tokenResponse: await Notifications.getExpoPushTokenAsync({ projectId }),
+        mode: 'explicit-project-id' as const,
+        projectId,
+      };
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[push] falha com projectId explicito, tentando fallback automatico:', error);
+      }
+    }
+  }
+
+  return {
+    tokenResponse: await Notifications.getExpoPushTokenAsync(),
+    mode: 'implicit-project-id' as const,
+    projectId: projectId ?? null,
+  };
 };
 
 const isExpoPushToken = (token: string) =>
@@ -73,11 +176,27 @@ const extractPushTokensFromUserData = (data: Record<string, unknown>) => {
   };
 
   addToken(data.expoPushToken);
+  addToken(data.expo_push_token);
   addToken(data.pushToken);
+  addToken(data.push_token);
 
   const list = data.pushTokens;
   if (Array.isArray(list)) {
     list.forEach((item) => {
+      if (typeof item === 'string') {
+        addToken(item);
+        return;
+      }
+
+      if (item && typeof item === 'object') {
+        addToken((item as { token?: unknown }).token);
+      }
+    });
+  }
+
+  const listSnakeCase = data.push_tokens;
+  if (Array.isArray(listSnakeCase)) {
+    listSnakeCase.forEach((item) => {
       if (typeof item === 'string') {
         addToken(item);
         return;
@@ -121,6 +240,109 @@ const chunk = <T,>(items: T[], chunkSize: number) => {
   return result;
 };
 
+const asErrorMessage = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error ?? 'Erro desconhecido');
+};
+
+const isAndroidFcmNotConfiguredError = (message: string) =>
+  Platform.OS === 'android'
+  && /(firebaseapp is not initialized|fcm-credentials|complete the guide)/i.test(message);
+
+const truncate = (value: string, max = 240) => {
+  const input = String(value ?? '').trim();
+  if (!input) {
+    return '';
+  }
+
+  if (input.length <= max) {
+    return input;
+  }
+
+  return `${input.slice(0, max - 3)}...`;
+};
+
+const tokenPreview = (value: string | null) => {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.length <= 20) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 12)}...${trimmed.slice(-6)}`;
+};
+
+const normalizeRemoteImageUrl = (value: unknown) => {
+  const candidate = String(value ?? '').trim();
+  if (!candidate) {
+    return null;
+  }
+
+  return /^https?:\/\//i.test(candidate) ? candidate : null;
+};
+
+const DEFAULT_NOTIFICATION_IMAGE_URL = normalizeRemoteImageUrl(
+  process.env.EXPO_PUBLIC_NOTIFICATION_IMAGE_URL,
+);
+
+const updatePushRegistrationDebug = async (
+  userId: string,
+  payload: {
+    status: string;
+    reason?: string;
+    permissionStatus?: string;
+    projectId?: string | null;
+    registrationMode?: string | null;
+    expoToken?: string | null;
+    devicePushToken?: string | null;
+    errorMessage?: string;
+  },
+) => {
+  const now = new Date().toISOString();
+
+  const data = {
+    version: PUSH_REGISTRATION_DEBUG_VERSION,
+    status: payload.status,
+    reason: payload.reason ?? null,
+    permissionStatus: payload.permissionStatus ?? null,
+    projectId: payload.projectId ?? null,
+    registrationMode: payload.registrationMode ?? null,
+    expoTokenPreview: tokenPreview(payload.expoToken ?? null),
+    devicePushTokenPreview: tokenPreview(payload.devicePushToken ?? null),
+    errorMessage: truncate(payload.errorMessage ?? '', 500) || null,
+    platform: Platform.OS,
+    isDevice: Device.isDevice,
+    appOwnership: Constants.appOwnership ?? null,
+    executionEnvironment: Constants.executionEnvironment ?? null,
+    updatedAt: now,
+  };
+
+  try {
+    await setDoc(
+      doc(db, 'users', userId),
+      {
+        pushRegistration: data,
+        push_registration: data,
+        lastPushRegistrationUpdate: now,
+        last_push_registration_update: now,
+      },
+      { merge: true },
+    );
+  } catch {
+    // Não bloqueia fluxo de registro por falha de telemetria.
+  }
+};
+
 const removeInvalidTokensFromUser = async (userId: string, invalidTokens: Set<string>) => {
   if (!invalidTokens.size) {
     return;
@@ -142,9 +364,13 @@ const removeInvalidTokensFromUser = async (userId: string, invalidTokens: Set<st
       ref,
       {
         pushTokens: filteredTokens,
+        push_tokens: filteredTokens,
         pushToken: nextPrimaryToken,
+        push_token: nextPrimaryToken,
         expoPushToken: nextPrimaryToken,
+        expo_push_token: nextPrimaryToken,
         lastPushTokenUpdate: new Date().toISOString(),
+        last_push_token_update: new Date().toISOString(),
       },
       { merge: true },
     );
@@ -154,15 +380,32 @@ const removeInvalidTokensFromUser = async (userId: string, invalidTokens: Set<st
 };
 
 export const registerForPushNotificationsAsync = async (userId: string) => {
+  const projectId = getExpoProjectId() ?? null;
+
+  await updatePushRegistrationDebug(userId, {
+    status: 'started',
+    projectId,
+  });
+
   const isExpoGo =
     Constants.executionEnvironment === 'storeClient' || Constants.appOwnership === 'expo';
 
   // Expo Go no Android (SDK 53+) não suporta push remoto.
   if (Platform.OS === 'android' && isExpoGo) {
+    await updatePushRegistrationDebug(userId, {
+      status: 'skipped',
+      reason: 'android-expo-go-no-remote-push',
+      projectId,
+    });
     return null;
   }
 
   if (!Device.isDevice) {
+    await updatePushRegistrationDebug(userId, {
+      status: 'skipped',
+      reason: 'not-a-physical-device',
+      projectId,
+    });
     return null;
   }
 
@@ -175,17 +418,14 @@ export const registerForPushNotificationsAsync = async (userId: string) => {
   }
 
   if (finalStatus !== 'granted') {
+    await updatePushRegistrationDebug(userId, {
+      status: 'permission-denied',
+      reason: 'notifications-permission-not-granted',
+      permissionStatus: finalStatus,
+      projectId,
+    });
     return null;
   }
-
-  const projectId = getExpoProjectId();
-  const tokenResponse = projectId
-    ? await Notifications.getExpoPushTokenAsync({ projectId })
-    : await Notifications.getExpoPushTokenAsync();
-
-  const expoToken = tokenResponse.data;
-  const nativeTokenResponse = await Notifications.getDevicePushTokenAsync();
-  const devicePushToken = String(nativeTokenResponse.data ?? '');
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
@@ -194,6 +434,53 @@ export const registerForPushNotificationsAsync = async (userId: string) => {
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#7CB342',
     });
+  }
+
+  let registrationMode: string | null = null;
+  let tokenResponse: { data: string };
+
+  try {
+    const result = await getExpoPushTokenWithFallback();
+    tokenResponse = result.tokenResponse;
+    registrationMode = result.mode;
+  } catch (error) {
+    const errorMessage = asErrorMessage(error);
+    await updatePushRegistrationDebug(userId, {
+      status: 'error',
+      reason: isAndroidFcmNotConfiguredError(errorMessage)
+        ? 'android-fcm-not-configured'
+        : 'expo-push-token-fetch-failed',
+      permissionStatus: finalStatus,
+      projectId,
+      errorMessage,
+    });
+    return null;
+  }
+
+  const expoToken = String(tokenResponse.data ?? '').trim();
+  if (!isExpoPushToken(expoToken)) {
+    await updatePushRegistrationDebug(userId, {
+      status: 'error',
+      reason: 'invalid-expo-push-token',
+      permissionStatus: finalStatus,
+      projectId,
+      registrationMode,
+      expoToken,
+    });
+    return null;
+  }
+  let devicePushToken: string | null = null;
+  let nativeTokenErrorMessage: string | null = null;
+
+  try {
+    const nativeTokenResponse = await Notifications.getDevicePushTokenAsync();
+    const normalizedDeviceToken = String(nativeTokenResponse.data ?? '').trim();
+    devicePushToken = normalizedDeviceToken || null;
+  } catch (error) {
+    nativeTokenErrorMessage = asErrorMessage(error);
+    if (__DEV__) {
+      console.warn('[push] nao foi possivel obter token nativo (seguindo apenas com Expo token):', error);
+    }
   }
 
   const userRef = doc(db, 'users', userId);
@@ -210,17 +497,47 @@ export const registerForPushNotificationsAsync = async (userId: string) => {
 
   const mergedTokens = Array.from(new Set([...existingTokens, expoToken]));
 
-  await setDoc(
-    userRef,
-    {
-      pushToken: expoToken,
-      expoPushToken: expoToken,
-      pushTokens: mergedTokens,
+  try {
+    await setDoc(
+      userRef,
+      {
+        pushToken: expoToken,
+        push_token: expoToken,
+        expoPushToken: expoToken,
+        expo_push_token: expoToken,
+        pushTokens: mergedTokens,
+        push_tokens: mergedTokens,
+        devicePushToken,
+        device_push_token: devicePushToken,
+        lastPushTokenUpdate: new Date().toISOString(),
+        last_push_token_update: new Date().toISOString(),
+      },
+      { merge: true },
+    );
+  } catch (error) {
+    await updatePushRegistrationDebug(userId, {
+      status: 'error',
+      reason: 'save-token-failed',
+      permissionStatus: finalStatus,
+      projectId,
+      registrationMode,
+      expoToken,
       devicePushToken,
-      lastPushTokenUpdate: new Date().toISOString(),
-    },
-    { merge: true },
-  );
+      errorMessage: asErrorMessage(error),
+    });
+    return null;
+  }
+
+  await updatePushRegistrationDebug(userId, {
+    status: 'registered',
+    reason: nativeTokenErrorMessage ? 'registered-without-native-token' : 'ok',
+    permissionStatus: finalStatus,
+    projectId,
+    registrationMode,
+    expoToken,
+    devicePushToken,
+    errorMessage: nativeTokenErrorMessage ?? undefined,
+  });
 
   // Garante que o token atual fique vinculado somente ao usuário logado no dispositivo.
   try {
@@ -249,6 +566,8 @@ export const sendPushToUsers = async ({
   body,
   data,
 }: SendPushToUsersParams) => {
+  const notificationImageUrl =
+    normalizeRemoteImageUrl(data?.imageUrl) ?? DEFAULT_NOTIFICATION_IMAGE_URL;
   const dedupUserIds = Array.from(new Set(userIds.map((id) => String(id).trim()).filter(Boolean)));
   if (!dedupUserIds.length) {
     return;
@@ -282,7 +601,7 @@ export const sendPushToUsers = async ({
       }
 
       tokenToUserIds.get(token)?.add(item.id);
-      messages.push({
+      const message: Record<string, unknown> = {
         to: token,
         sound: 'default',
         title,
@@ -290,10 +609,18 @@ export const sendPushToUsers = async ({
         data: {
           ...(data ?? {}),
           topic,
+          ...(notificationImageUrl ? { imageUrl: notificationImageUrl } : {}),
         },
         priority: 'high',
         channelId: 'default',
-      });
+      };
+
+      if (notificationImageUrl) {
+        message.mutableContent = true;
+        message.richContent = { image: notificationImageUrl };
+      }
+
+      messages.push(message);
     });
   });
 

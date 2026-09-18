@@ -1,4 +1,5 @@
 import { AuthError, User as SupabaseUser } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 import { AppUser } from '../types/models';
 import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from './firestoreLiteCompat';
 import { getFirebaseDb } from './firebase';
@@ -69,6 +70,29 @@ const getCurrentSessionUser = async () => {
 };
 
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const resolveEmailRedirectUrl = () => {
+  // No web, o link de confirmação/reset precisa voltar para o próprio navegador
+  // para que o SDK capture o token (#access_token=...) e inicie a sessão.
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.origin) {
+    // Usa origin + pathname: em subpasta (GitHub Pages: /<repo>/), o redirect
+    // precisa voltar para dentro do app, não para a raiz do domínio.
+    const pathname = window.location.pathname.replace(/[^/]*$/, '');
+    return `${window.location.origin}${pathname}`;
+  }
+
+  const explicitRedirect = String(process.env.EXPO_PUBLIC_SUPABASE_EMAIL_REDIRECT_URL ?? '').trim();
+  if (explicitRedirect) {
+    return explicitRedirect;
+  }
+
+  const resetRedirect = String(process.env.EXPO_PUBLIC_SUPABASE_PASSWORD_RESET_URL ?? '').trim();
+  if (resetRedirect) {
+    return resetRedirect;
+  }
+
+  return 'chacarasf://auth/callback';
+};
 
 const upsertUserProfile = async (payload: AppUser) => {
   try {
@@ -149,7 +173,7 @@ export const loginWithEmail = async (email: string, password: string) => {
 
 export const sendResetPasswordEmail = async (email: string) => {
   const { error } = await getSupabase().auth.resetPasswordForEmail(normalizeEmail(email), {
-    redirectTo: process.env.EXPO_PUBLIC_SUPABASE_PASSWORD_RESET_URL,
+    redirectTo: resolveEmailRedirectUrl(),
   });
 
   if (error) {
@@ -219,6 +243,7 @@ export const createTenantByOwner = async (payload: CreateTenantPayload) => {
     email,
     password: senhaTemporaria,
     options: {
+      emailRedirectTo: resolveEmailRedirectUrl(),
       data: {
         name: nome,
         nome,
@@ -305,7 +330,7 @@ export const resetTenantPasswordByOwner = async (userId: string) => {
   }
 
   const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
-    redirectTo: process.env.EXPO_PUBLIC_SUPABASE_PASSWORD_RESET_URL,
+    redirectTo: resolveEmailRedirectUrl(),
   });
 
   if (error) {
@@ -327,6 +352,7 @@ export const registerOwner = async ({ nome, email, senha }: SelfRegisterPayload)
     email: normalizedEmail,
     password: senha,
     options: {
+      emailRedirectTo: resolveEmailRedirectUrl(),
       data: {
         name: normalizedName,
         nome: normalizedName,

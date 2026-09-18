@@ -1,13 +1,23 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { ResizeMode, Video } from 'expo-av';
 import { AppButton } from '../../components/AppButton';
 import { AppCard } from '../../components/AppCard';
+import { AppCheckbox } from '../../components/AppCheckbox';
 import { AppInput } from '../../components/AppInput';
+import { AppSelect } from '../../components/AppSelect';
 import { EmptyState } from '../../components/EmptyState';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { SectionHeader } from '../../components/SectionHeader';
 import { StatusBadge } from '../../components/StatusBadge';
 import { palette, radii, spacing } from '../../constants/theme';
 import { useAuth } from '../../contexts/AuthContext';
@@ -17,6 +27,27 @@ import { CameraConfig, House } from '../../types/models';
 
 const sortByName = (items: CameraConfig[]) =>
   [...items].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
+
+const isRtspUrl = (value: string) => /^rtsp:\/\//i.test(value.trim());
+const isHttpUrl = (value: string) => /^https?:\/\//i.test(value.trim());
+
+const normalizeStreamUrl = (rawUrl: string) => {
+  const value = rawUrl.trim();
+  if (!value) {
+    return '';
+  }
+
+  if (isHttpUrl(value) || isRtspUrl(value)) {
+    return value;
+  }
+
+  // Accept values like 192.168.0.20:8888/cam/index.m3u8 and normalize to HTTP.
+  if (/^[\w.-]+(?::\d+)?\/.+$/.test(value)) {
+    return `http://${value}`;
+  }
+
+  return value;
+};
 
 const toBase64 = (value: string) => {
   if (typeof globalThis.btoa === 'function') {
@@ -61,7 +92,7 @@ const applyCredentialsToUrl = (rawUrl: string, username: string, password: strin
 };
 
 const buildPlaybackSource = (playbackUrl: string) => {
-  const normalized = playbackUrl.trim();
+  const normalized = normalizeStreamUrl(playbackUrl);
   if (!normalized) {
     return { uri: '' };
   }
@@ -94,8 +125,27 @@ const hasPrivateHost = (rawUrl: string) => {
   }
 };
 
+const withCacheBust = (rawUrl: string, token: number) => {
+  if (!rawUrl || token <= 0) {
+    return rawUrl;
+  }
+
+  const nonce = `${Date.now()}-${token}`;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.searchParams.set('_ts', nonce);
+    return parsed.toString();
+  } catch {
+    return `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}_ts=${nonce}`;
+  }
+};
+
 const mapPlaybackError = (detail: string, streamUrl: string) => {
   const lower = detail.toLowerCase();
+  if (lower.includes('-1100') || lower.includes('error code -1100') || lower.includes('not found')) {
+    return 'Stream indisponível no momento (HLS não encontrado). Verifique se essa câmera está ativa no MediaMTX.';
+  }
+
   if (
     lower.includes('401')
     || lower.includes('403')
@@ -111,13 +161,14 @@ const mapPlaybackError = (detail: string, streamUrl: string) => {
     || lower.includes('failed to connect')
     || lower.includes('timeout')
     || lower.includes('sockettimeoutexception')
+    || lower.includes('network request failed')
   ) {
     return hasPrivateHost(streamUrl)
       ? 'Sem conexão com o servidor da câmera. No Android, conecte no mesmo Wi-Fi do MediaMTX ou use uma URL pública.'
       : 'Sem conexão com o servidor da câmera. Verifique internet e URL HLS.';
   }
 
-  return `Não foi possível reproduzir este stream no player interno. ${detail ? `Detalhe: ${detail.slice(0, 140)}` : 'Use HLS (.m3u8) do MediaMTX em H264.'
+  return `Não foi possível reproduzir este stream no player. ${detail ? `Detalhe: ${detail.slice(0, 140)}` : 'Use HLS (.m3u8) do MediaMTX em H264.'
     }`;
 };
 
@@ -131,15 +182,17 @@ export const CamerasScreen = () => {
   const [cameras, setCameras] = useState<CameraConfig[]>([]);
   const [houses, setHouses] = useState<House[]>([]);
   const [selectedCamera, setSelectedCamera] = useState<CameraConfig | null>(null);
+  const [selectedExternalUrl, setSelectedExternalUrl] = useState('');
+  const [playerReloadToken, setPlayerReloadToken] = useState(0);
+  const [playerRetryCount, setPlayerRetryCount] = useState(0);
   const [playerLoading, setPlayerLoading] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
-  const [playerAndroidImpl, setPlayerAndroidImpl] = useState<'ExoPlayer' | 'MediaPlayer'>('MediaPlayer');
+  const [playerAndroidImpl, setPlayerAndroidImpl] = useState<'ExoPlayer' | 'MediaPlayer'>('ExoPlayer');
   const videoRef = useRef<Video | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [rtspUrl, setRtspUrl] = useState('');
-  const [playbackUrl, setPlaybackUrl] = useState('');
+  const [playbackUrlExternal, setPlaybackUrlExternal] = useState('');
   const [allowedHouses, setAllowedHouses] = useState<string[]>([]);
   const [active, setActive] = useState(true);
 
@@ -200,8 +253,7 @@ export const CamerasScreen = () => {
   const resetForm = () => {
     setEditingId(null);
     setName('');
-    setRtspUrl('');
-    setPlaybackUrl('');
+    setPlaybackUrlExternal('');
     setAllowedHouses([]);
     setActive(true);
   };
@@ -209,8 +261,7 @@ export const CamerasScreen = () => {
   const handleEditCamera = (camera: CameraConfig) => {
     setEditingId(camera.id);
     setName(camera.nome);
-    setRtspUrl(camera.rtspUrl);
-    setPlaybackUrl(camera.playbackUrl ?? '');
+    setPlaybackUrlExternal(camera.playbackUrlExternal ?? camera.playbackUrl ?? '');
     setAllowedHouses(camera.casasPermitidas ?? []);
     setActive(camera.ativo !== false);
   };
@@ -226,23 +277,25 @@ export const CamerasScreen = () => {
 
   const handleSaveCamera = async () => {
     const normalizedName = name.trim();
-    const normalizedRtsp = rtspUrl.trim();
-    const normalizedPlayback = playbackUrl.trim();
+    const normalizedExternal = normalizeStreamUrl(playbackUrlExternal);
 
-    if (!normalizedName || !normalizedRtsp) {
-      Alert.alert('Campos obrigatórios', 'Informe nome e URL RTSP da câmera.');
+    if (!normalizedName || !isHttpUrl(normalizedExternal)) {
+      Alert.alert('Campos obrigatórios', 'Informe nome e URL de reprodução externa (http/https).');
       return;
     }
 
     const now = new Date().toISOString();
+    const existingCamera = cameras.find((item) => item.id === editingId);
     const nextCamera: CameraConfig = {
       id: editingId ?? `camera-${Date.now()}`,
       nome: normalizedName,
-      rtspUrl: normalizedRtsp,
-      playbackUrl: normalizedPlayback || undefined,
+      // Mantido só por compatibilidade com schema legado.
+      rtspUrl: existingCamera?.rtspUrl || normalizedExternal,
+      playbackUrl: undefined,
+      playbackUrlExternal: normalizedExternal,
       casasPermitidas: allowedHouses,
       ativo: active,
-      criadoEm: cameras.find((item) => item.id === editingId)?.criadoEm ?? now,
+      criadoEm: existingCamera?.criadoEm ?? now,
       atualizadoEm: now,
     };
 
@@ -282,48 +335,52 @@ export const CamerasScreen = () => {
   };
 
   const openCamera = (camera: CameraConfig) => {
-    setPlayerError(null);
-    setPlayerLoading(true);
-    // MediaPlayer first: better compatibility for some HLS streams on Android devices.
-    setPlayerAndroidImpl('MediaPlayer');
     setSelectedCamera(camera);
+    setPlayerAndroidImpl('ExoPlayer');
+    const externalUrl = normalizeStreamUrl(camera.playbackUrlExternal ?? camera.playbackUrl ?? '');
+    setSelectedExternalUrl(externalUrl);
+    setPlayerReloadToken(0);
+    setPlayerRetryCount(0);
+    setPlayerError(null);
+    setPlayerLoading(Boolean(externalUrl));
 
-    const streamUrl = String(camera.playbackUrl ?? '').trim() || camera.rtspUrl;
-    const isRtsp = /^rtsp:\/\//i.test(streamUrl);
-
-    if (isRtsp) {
-      setPlayerLoading(false);
-      setPlayerError(
-        'RTSP puro costuma falhar no player interno. Cadastre também a URL de reprodução interna (HLS .m3u8).',
-      );
+    if (isHttpUrl(externalUrl)) {
+      return;
     }
+
+    if (!externalUrl) {
+      setPlayerLoading(false);
+      setPlayerError('Esta câmera não tem URL de reprodução externa configurada.');
+      return;
+    }
+
+    setPlayerLoading(false);
+    setPlayerError('A URL externa precisa começar com http:// ou https:// e apontar para HLS (.m3u8).');
   };
 
   const closePlayer = () => {
     setSelectedCamera(null);
+    setSelectedExternalUrl('');
+    setPlayerReloadToken(0);
+    setPlayerRetryCount(0);
     setPlayerLoading(false);
     setPlayerError(null);
+    setPlayerAndroidImpl('ExoPlayer');
   };
 
-  const selectedStreamUrl = useMemo(() => {
-    if (!selectedCamera) {
-      return '';
-    }
-
-    return String(selectedCamera.playbackUrl ?? '').trim() || selectedCamera.rtspUrl;
-  }, [selectedCamera]);
+  const selectedStreamUrl = selectedExternalUrl;
 
   const selectedStreamSource = useMemo(
-    () => buildPlaybackSource(selectedStreamUrl),
-    [selectedStreamUrl],
+    () => buildPlaybackSource(withCacheBust(selectedStreamUrl, playerReloadToken)),
+    [playerReloadToken, selectedStreamUrl],
   );
+
+  const canUseNativePlayer = useMemo(() => isHttpUrl(selectedStreamUrl), [selectedStreamUrl]);
+  const showNativePlayer = Boolean(selectedCamera && selectedStreamUrl && canUseNativePlayer);
+  const showEmptyPlayer = Boolean(selectedCamera && !showNativePlayer);
 
   return (
     <ScreenContainer refreshing={loadingData} onRefresh={handleRefresh}>
-      <SectionHeader
-        title="CAMERAS"
-        subtitle={isOwner ? 'Cadastro de câmeras e permissão por casa' : 'Câmeras permitidas para sua casa'}
-      />
 
       {isOwner ? (
         <AppCard>
@@ -335,56 +392,51 @@ export const CamerasScreen = () => {
             placeholder="Ex: Entrada principal"
           />
           <AppInput
-            label="URL RTSP"
-            value={rtspUrl}
-            onChangeText={setRtspUrl}
-            placeholder="rtsp://usuario:senha@ip:554/stream"
-          />
-          <AppInput
-            label="URL de reprodução interna (opcional)"
-            value={playbackUrl}
-            onChangeText={setPlaybackUrl}
-            placeholder="https://.../stream.m3u8"
+            label="URL de reprodução externa"
+            value={playbackUrlExternal}
+            onChangeText={setPlaybackUrlExternal}
+            placeholder="https://seu-dominio/camera/index.m3u8"
           />
           <Text style={styles.helperText}>
-            Dica: informe URL HLS (.m3u8) do MediaMTX para reproduzir no player interno.
+            Apenas player externo: use uma URL HTTP/HTTPS HLS (.m3u8).
           </Text>
 
           <Text style={styles.label}>Casas que podem ver</Text>
-          <View style={styles.wrap}>
-            <Pressable
-              style={[styles.chip, allowedHouses.length === 0 && styles.chipActive]}
-              onPress={() => setAllowedHouses([])}
-            >
-              <Text style={[styles.chipText, allowedHouses.length === 0 && styles.chipTextActive]}>Todas</Text>
-            </Pressable>
-            {houses.map((house) => (
-              <Pressable
-                key={house.id}
-                style={[styles.chip, allowedHouses.includes(house.id) && styles.chipActive]}
-                onPress={() => toggleHousePermission(house.id)}
-              >
-                <Text style={[styles.chipText, allowedHouses.includes(house.id) && styles.chipTextActive]}>
-                  {house.nome || house.id}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <AppCheckbox
+            label="Disponível para todas as casas"
+            checked={allowedHouses.length === 0}
+            onChange={(checked) => {
+              if (checked) {
+                setAllowedHouses([]);
+              } else if (!houses.length) {
+                setAllowedHouses([]);
+              } else {
+                setAllowedHouses([houses[0].id]);
+              }
+            }}
+          />
+          {allowedHouses.length > 0 ? (
+            <View style={styles.checkboxList}>
+              {houses.map((house) => (
+                <AppCheckbox
+                  key={house.id}
+                  label={house.nome || house.id}
+                  checked={allowedHouses.includes(house.id)}
+                  onChange={() => toggleHousePermission(house.id)}
+                />
+              ))}
+            </View>
+          ) : null}
 
-          <View style={styles.wrap}>
-            <Pressable
-              style={[styles.chip, active && styles.chipActive]}
-              onPress={() => setActive(true)}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>Ativa</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.chip, !active && styles.chipActive]}
-              onPress={() => setActive(false)}
-            >
-              <Text style={[styles.chipText, !active && styles.chipTextActive]}>Inativa</Text>
-            </Pressable>
-          </View>
+          <AppSelect
+            label="Status da câmera"
+            value={active ? 'ativa' : 'inativa'}
+            onChange={(value) => setActive(value === 'ativa')}
+            options={[
+              { label: 'Ativa', value: 'ativa' },
+              { label: 'Inativa', value: 'inativa' },
+            ]}
+          />
 
           <AppButton label={editingId ? 'Salvar câmera' : 'Adicionar câmera'} onPress={handleSaveCamera} loading={saving} />
           {editingId ? <AppButton label="Cancelar edição" variant="ghost" onPress={resetForm} /> : null}
@@ -394,7 +446,9 @@ export const CamerasScreen = () => {
       <AppCard>
         <View style={styles.inlineSpace}>
           <Text style={styles.cardTitle}>Lista de câmeras</Text>
-          <StatusBadge text={`${visibleCameras.length}`} tone="info" />
+          <View style={styles.inlineActions}>
+            <StatusBadge text={`${visibleCameras.length}`} tone="info" />
+          </View>
         </View>
 
         {loadingData ? (
@@ -408,12 +462,9 @@ export const CamerasScreen = () => {
               </View>
               {isOwner ? (
                 <>
-                  <Text style={styles.urlText} numberOfLines={2}>
-                    {camera.rtspUrl}
-                  </Text>
-                  {camera.playbackUrl ? (
+                  {camera.playbackUrlExternal || camera.playbackUrl ? (
                     <Text style={styles.urlText} numberOfLines={2}>
-                      Player interno: {camera.playbackUrl}
+                      Player externo: {camera.playbackUrlExternal ?? camera.playbackUrl}
                     </Text>
                   ) : null}
 
@@ -427,7 +478,7 @@ export const CamerasScreen = () => {
                 </>
               ) : null}
               <View style={styles.actionsRow}>
-                <AppButton label="Abrir stream" variant="secondary" onPress={() => openCamera(camera)} />
+                <AppButton label="Abrir video" variant="secondary" onPress={() => openCamera(camera)} />
                 {isOwner ? (
                   <>
                     <AppButton label="Editar" variant="ghost" onPress={() => handleEditCamera(camera)} />
@@ -445,67 +496,99 @@ export const CamerasScreen = () => {
         ) : (
           <EmptyState
             title="Sem câmeras disponíveis"
-            subtitle={isOwner ? 'Cadastre sua primeira câmera RTSP.' : 'Nenhuma câmera liberada para sua casa.'}
+            subtitle={isOwner ? 'Cadastre sua primeira câmera com URL externa.' : 'Nenhuma câmera liberada para sua casa.'}
           />
         )}
       </AppCard>
-
       <Modal visible={Boolean(selectedCamera)} transparent animationType="slide" onRequestClose={closePlayer}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{selectedCamera?.nome ?? 'Stream'}</Text>
-              <Pressable onPress={closePlayer} style={styles.modalCloseButton}>
-                <Text style={styles.modalCloseText}>Fechar</Text>
+              <View style={styles.modalTitleWrap}>
+                <Text style={styles.modalEyebrow}>MONITORAMENTO AO VIVO</Text>
+                <Text style={styles.modalTitle}>{selectedCamera?.nome ?? 'Stream'}</Text>
+              </View>
+              <Pressable onPress={closePlayer} style={[styles.modalCloseButton, styles.modalCloseButtonDark]}>
+                <Text style={styles.modalCloseTextDark}>Fechar</Text>
               </Pressable>
             </View>
 
-            {selectedCamera ? (
-              <Video
-                key={`${selectedCamera.id}-${playerAndroidImpl}`}
-                ref={(ref) => {
-                  videoRef.current = ref;
-                }}
-                source={selectedStreamSource}
-                style={styles.video}
-                useNativeControls
-                shouldPlay
-                {...(Platform.OS === 'android' ? { androidImplementation: playerAndroidImpl } : {})}
-                resizeMode={ResizeMode.CONTAIN}
-                onLoadStart={() => {
-                  setPlayerLoading(true);
-                  setPlayerError(null);
-                }}
-                onReadyForDisplay={() => {
-                  setPlayerLoading(false);
-                  setPlayerError(null);
-                  void videoRef.current?.playAsync().catch(() => undefined);
-                }}
-                onError={(error) => {
-                  console.warn('[Cameras] erro ao reproduzir stream:', error);
-                  const detail = typeof error === 'string' ? error : JSON.stringify(error);
+            <View style={styles.streamMetaRow}>
+              <View style={styles.liveBadge}>
+                <Text style={styles.liveBadgeText}>AO VIVO</Text>
+              </View>
+            </View>
 
-                  if (Platform.OS === 'android' && playerAndroidImpl === 'MediaPlayer') {
-                    setPlayerAndroidImpl('ExoPlayer');
+            <View style={styles.videoShell}>
+              {showNativePlayer ? (
+                <Video
+                  key={`${selectedCamera?.id ?? 'camera'}-${selectedStreamUrl}-${playerAndroidImpl}-${playerReloadToken}`}
+                  ref={(ref) => {
+                    videoRef.current = ref;
+                  }}
+                  source={selectedStreamSource}
+                  style={styles.video}
+                  useNativeControls
+                  shouldPlay
+                  {...(Platform.OS === 'android' ? { androidImplementation: playerAndroidImpl } : {})}
+                  resizeMode={ResizeMode.CONTAIN}
+                  onLoadStart={() => {
                     setPlayerLoading(true);
-                    setPlayerError('Tentando modo de compatibilidade Android...');
-                    return;
-                  }
+                    setPlayerError(null);
+                  }}
+                  onReadyForDisplay={() => {
+                    setPlayerLoading(false);
+                    setPlayerError(null);
+                    setPlayerRetryCount(0);
+                    void videoRef.current?.playAsync().catch(() => undefined);
+                  }}
+                  onError={(error) => {
+                    console.warn('[Cameras] erro ao reproduzir stream externo:', error);
+                    const detail = typeof error === 'string' ? error : JSON.stringify(error);
+                    const lower = detail.toLowerCase();
+                    const isNotFound1100 = lower.includes('-1100') || lower.includes('error code -1100') || lower.includes('not found');
 
-                  setPlayerLoading(false);
-                  setPlayerError(mapPlaybackError(detail, selectedStreamUrl));
-                }}
-              />
-            ) : null}
+                    if (isNotFound1100 && playerRetryCount < 2) {
+                      setPlayerRetryCount((current) => current + 1);
+                      setPlayerReloadToken((current) => current + 1);
+                      setPlayerLoading(true);
+                      setPlayerError('Reconectando stream...');
+                      return;
+                    }
+
+                    if (Platform.OS === 'android' && playerAndroidImpl === 'ExoPlayer') {
+                      setPlayerAndroidImpl('MediaPlayer');
+                      setPlayerRetryCount(0);
+                      setPlayerReloadToken(0);
+                      setPlayerLoading(true);
+                      setPlayerError('Tentando modo de compatibilidade...');
+                      return;
+                    }
+
+                    setPlayerLoading(false);
+                    setPlayerError(mapPlaybackError(detail, selectedStreamUrl));
+                  }}
+                />
+              ) : null}
+
+              {showEmptyPlayer ? (
+                <View style={styles.videoPlaceholder}>
+                  <Text style={styles.playerStatusText}>
+                    Configure uma URL de reprodução (.m3u8) desta câmera para visualizar aqui.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
 
             {playerLoading ? (
               <View style={styles.playerStatusRow}>
-                <ActivityIndicator size="small" color={palette.greenDark} />
+                <ActivityIndicator size="small" color="#00D1B2" />
                 <Text style={styles.playerStatusText}>Conectando ao stream...</Text>
               </View>
             ) : null}
 
             {playerError ? <Text style={styles.playerErrorText}>{playerError}</Text> : null}
+
           </View>
         </View>
       </Modal>
@@ -515,9 +598,10 @@ export const CamerasScreen = () => {
 
 const styles = StyleSheet.create({
   cardTitle: {
-    fontSize: 16,
+    fontSize: 17,
     color: palette.gray900,
-    fontWeight: '800',
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   label: {
     color: palette.gray700,
@@ -526,38 +610,23 @@ const styles = StyleSheet.create({
   },
   helperText: {
     color: palette.gray700,
-    fontSize: 12,
+    fontSize: 13,
     marginTop: spacing.xs,
   },
-  wrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  chip: {
-    borderWidth: 1,
-    borderColor: palette.gray300,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: palette.white,
-  },
-  chipActive: {
-    borderColor: palette.greenDark,
-    backgroundColor: '#EDF5EA',
-  },
-  chipText: {
-    color: palette.gray700,
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  chipTextActive: {
-    color: palette.greenDark,
+  checkboxList: {
+    gap: spacing.xs,
   },
   inlineSpace: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  inlineActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: spacing.sm,
   },
   cameraRow: {
@@ -576,16 +645,16 @@ const styles = StyleSheet.create({
   cameraName: {
     color: palette.gray900,
     fontWeight: '800',
-    fontSize: 15,
+    fontSize: 16,
     flex: 1,
   },
   urlText: {
     color: palette.gray700,
-    fontSize: 12,
+    fontSize: 13,
   },
   infoText: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 14,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -594,45 +663,115 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'rgba(3,10,14,0.86)',
     justifyContent: 'center',
-    padding: spacing.lg,
+    padding: spacing.md,
   },
   modalCard: {
-    backgroundColor: palette.white,
-    borderRadius: radii.lg,
+    backgroundColor: '#0B151B',
+    borderRadius: 22,
     padding: spacing.md,
     gap: spacing.sm,
+    maxHeight: '90%',
+    borderWidth: 1,
+    borderColor: '#1A3A46',
+    shadowColor: '#00D1B2',
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  modalTitle: {
-    color: palette.gray900,
-    fontSize: 16,
-    fontWeight: '800',
+  modalTitleWrap: {
     flex: 1,
+    gap: 2,
+  },
+  modalEyebrow: {
+    color: '#58D8C8',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+  },
+  modalTitle: {
+    color: '#E7FAF7',
+    fontSize: 19,
+    fontWeight: '800',
   },
   modalCloseButton: {
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    minHeight: 44,
+    justifyContent: 'center',
     borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: palette.gray300,
   },
-  modalCloseText: {
-    color: palette.gray700,
+  modalCloseButtonDark: {
+    borderColor: '#2C5560',
+    backgroundColor: '#0F252D',
+  },
+  modalCloseTextDark: {
+    color: '#BEECE6',
     fontWeight: '700',
+    fontSize: 13,
+  },
+  streamMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: 2,
+  },
+  liveBadge: {
+    borderWidth: 1,
+    borderColor: '#1DBE95',
+    backgroundColor: 'rgba(29,190,149,0.16)',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  liveBadgeText: {
+    color: '#8CFFD8',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  streamMetaText: {
+    color: '#8FB8C3',
     fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
+  videoShell: {
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: '#1C4250',
+    backgroundColor: '#03080B',
+    padding: 4,
+    shadowColor: '#00A4C8',
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
   video: {
     width: '100%',
-    height: 240,
+    height: 250,
     borderRadius: radii.md,
     backgroundColor: '#000',
+  },
+  videoPlaceholder: {
+    width: '100%',
+    height: 250,
+    borderRadius: radii.md,
+    backgroundColor: '#081218',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: '#223E49',
   },
   playerStatusRow: {
     flexDirection: 'row',
@@ -640,12 +779,12 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   playerStatusText: {
-    color: palette.gray700,
+    color: '#B7D7DE',
     fontSize: 13,
   },
   playerErrorText: {
-    color: palette.danger,
+    color: '#FF7A8A',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

@@ -10,12 +10,26 @@ interface AppConfigContextData {
   refreshConfig: () => Promise<void>;
 }
 
+const defaultTenantGateAccess = {
+  enabled: true,
+  defaultWindowStart: '06:00',
+  defaultWindowEnd: '23:00',
+  defaultCooldownSeconds: 30,
+  defaultMaxOpensPerDay: 10,
+  defaultRequireProximity: true,
+  defaultMaxDistanceMeters: 200,
+  defaultRequireBiometric: true,
+  houseRules: [],
+};
+
 const defaultConfig: AppConfig = {
   propriedadeNome: 'Chácara São Francisco',
   chavePix: '',
   tarifaEnergia: 0,
   gateWebhookUrl: '',
   gateCloseWebhookUrl: '',
+  tenantGateAccess: defaultTenantGateAccess,
+  headlights: [],
   latitude: -23.55052,
   longitude: -46.633308,
   temaEscuroAtivo: false,
@@ -28,6 +42,21 @@ const defaultConfig: AppConfig = {
   },
 };
 
+const normalizeAppConfig = (raw?: Partial<AppConfig> | null): AppConfig => ({
+  ...defaultConfig,
+  ...raw,
+  tenantGateAccess: {
+    ...defaultTenantGateAccess,
+    ...(raw?.tenantGateAccess ?? {}),
+    houseRules: Array.isArray(raw?.tenantGateAccess?.houseRules) ? raw?.tenantGateAccess?.houseRules : [],
+  },
+  notificacoes: {
+    ...defaultConfig.notificacoes,
+    ...(raw?.notificacoes ?? {}),
+  },
+  temaEscuroAtivo: false,
+});
+
 const AppConfigContext = createContext<AppConfigContextData | undefined>(undefined);
 
 export const AppConfigProvider = ({ children }: { children: ReactNode }) => {
@@ -36,8 +65,9 @@ export const AppConfigProvider = ({ children }: { children: ReactNode }) => {
 
   const fetchRemoteConfig = async () => {
     const result = await getGlobalConfig();
-    setConfig({ ...defaultConfig, ...result });
-    await saveCache(cacheKeys.settings, result);
+    const normalizedConfig = normalizeAppConfig(result);
+    setConfig(normalizedConfig);
+    await saveCache(cacheKeys.settings, normalizedConfig);
   };
 
   const refreshConfig = async () => {
@@ -48,7 +78,7 @@ export const AppConfigProvider = ({ children }: { children: ReactNode }) => {
     } catch {
       const cached = await getCache<AppConfig>(cacheKeys.settings);
       if (cached) {
-        setConfig({ ...defaultConfig, ...cached });
+        setConfig(normalizeAppConfig(cached));
       }
     } finally {
       setLoadingConfig(false);
@@ -64,7 +94,7 @@ export const AppConfigProvider = ({ children }: { children: ReactNode }) => {
       try {
         const cached = await getCache<AppConfig>(cacheKeys.settings);
         if (cached) {
-          setConfig({ ...defaultConfig, ...cached });
+          setConfig(normalizeAppConfig(cached));
         }
       } finally {
         clearTimeout(startupGuard);
@@ -82,10 +112,23 @@ export const AppConfigProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const saveConfigHandler = async (payload: Partial<AppConfig>) => {
-    const next = { ...config, ...payload };
+    const next = normalizeAppConfig({
+      ...config,
+      ...payload,
+      tenantGateAccess: {
+        ...defaultTenantGateAccess,
+        ...(config.tenantGateAccess ?? {}),
+        ...(payload.tenantGateAccess ?? {}),
+        houseRules: payload.tenantGateAccess?.houseRules ?? config.tenantGateAccess?.houseRules ?? [],
+      },
+      notificacoes: {
+        ...config.notificacoes,
+        ...(payload.notificacoes ?? {}),
+      },
+    });
     setConfig(next);
     await saveCache(cacheKeys.settings, next);
-    await updateGlobalConfig(payload);
+    await updateGlobalConfig({ ...payload, temaEscuroAtivo: false });
   };
 
   const value = useMemo(

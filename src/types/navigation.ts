@@ -8,6 +8,8 @@ export type RootStackParamList = {
   Settings: undefined;
   EmergencyContacts: undefined;
   Notices: undefined;
+  AIContract: undefined;
+  HeadlightsConfig: undefined;
 };
 
 export type AuthStackParamList = {
@@ -21,6 +23,7 @@ export type AppTabParamList = {
   Home: undefined;
   Gate: undefined;
   Cameras: undefined;
+  Headlights: undefined;
   Finance: undefined;
   Tickets: undefined;
   Chat: undefined;

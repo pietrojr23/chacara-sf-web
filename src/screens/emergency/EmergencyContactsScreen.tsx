@@ -154,10 +154,12 @@ export const EmergencyContactsScreen = () => {
 
 const styles = StyleSheet.create({
   cardTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     color: palette.gray900,
+    textTransform: 'uppercase',
   },
+
   contactRow: {
     borderWidth: 1,
     borderColor: palette.gray100,
@@ -179,16 +181,19 @@ const styles = StyleSheet.create({
   },
   contactMeta: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 14,
   },
   callButton: {
     backgroundColor: palette.greenDark,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radii.pill,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   callText: {
     color: palette.white,
+    fontSize: 15,
     fontWeight: '700',
   },
 });

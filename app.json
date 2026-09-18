@@ -2,6 +2,7 @@
   "expo": {
     "name": "Chácara Sao Francisco",
     "slug": "chacara-sao-francisco",
+    "scheme": "chacarasf",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,6 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chacarasf.app",
+      "icon": "./assets/icon.png",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoadsInMedia": true
@@ -22,36 +24,62 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#F5F0E8",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#0F2530",
+        "foregroundImage": "./assets/icon.png",
+        "monochromeImage": "./assets/icon.png"
       },
       "package": "com.chacarasf.app",
-      "usesCleartextTraffic": true,
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon.png"
     },
     "plugins": [
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#0F2530",
+          "defaultChannel": "default"
+        }
+      ],
       "expo-document-picker",
       "expo-image-picker",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Precisamos da sua localização para liberar a abertura do portão apenas quando você estiver na chácara."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Use Face ID para confirmar a abertura do portão."
+        }
+      ]
     ],
     "extra": {
       "eas": {
         "projectId": "12302724-7672-42c8-9aaa-ac55994910fd"
       }
     },
-    "owner": "pietrojr2"
+    "owner": "pietrojr2",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/12302724-7672-42c8-9aaa-ac55994910fd"
+    }
   }
 }

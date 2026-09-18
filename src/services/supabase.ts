@@ -1,5 +1,6 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const normalizeEnv = (value: string | undefined) => value?.trim() ?? '';
@@ -70,7 +71,9 @@ export const getSupabase = () => {
         storage: AsyncStorage as any,
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: false,
+        // No web, o navegador recebe o token de confirmação/recuperação na URL
+        // (#access_token=...) e o SDK precisa processá-lo automaticamente.
+        detectSessionInUrl: Platform.OS === 'web',
       },
     });
   }

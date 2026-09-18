@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
 import { AppButton } from '../../components/AppButton';
 import { AppCard } from '../../components/AppCard';
+import { AppSelect } from '../../components/AppSelect';
 import { EmptyState } from '../../components/EmptyState';
 import { AppInput } from '../../components/AppInput';
 import { ScreenContainer } from '../../components/ScreenContainer';
@@ -16,7 +17,9 @@ import {
   getAllHouses,
   getHouseDocuments,
   getHouseProfile,
+  updateHousePets,
   updateHouseResidents,
+  updateHouseVehicles,
   upsertHouse,
   upsertHouseDocument,
 } from '../../services/firestoreService';
@@ -24,6 +27,17 @@ import { uploadFileAsync } from '../../services/storageService';
 import { House, HouseDocument } from '../../types/models';
 import { formatDateBR } from '../../utils/format';
 import { getFileExtension } from '../../utils/file';
+
+const onlyDigits = (value: string) => String(value ?? '').replace(/\D/g, '');
+
+const formatCpf = (value?: string) => {
+  const digits = onlyDigits(String(value ?? ''));
+  if (digits.length !== 11) {
+    return value || '-';
+  }
+
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+};
 
 export const HouseProfileScreen = () => {
   const { profile, firebaseUser } = useAuth();
@@ -36,10 +50,28 @@ export const HouseProfileScreen = () => {
   const [documents, setDocuments] = useState<HouseDocument[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [actionLoading, setActionLoading] = useState<
-    null | 'createHouse' | 'addResident' | 'uploadDocument' | 'removeResident'
+    null
+    | 'createHouse'
+    | 'addResident'
+    | 'uploadDocument'
+    | 'removeResident'
+    | 'addPet'
+    | 'removePet'
+    | 'addVehicle'
+    | 'removeVehicle'
   >(null);
   const [residentName, setResidentName] = useState('');
   const [residentContact, setResidentContact] = useState('');
+  const [residentCpf, setResidentCpf] = useState('');
+  const [residentPhone, setResidentPhone] = useState('');
+  const [residentEmail, setResidentEmail] = useState('');
+  const [residentRelation, setResidentRelation] = useState('');
+  const [residentBirthDate, setResidentBirthDate] = useState('');
+  const [residentNotes, setResidentNotes] = useState('');
+  const [vehiclePlate, setVehiclePlate] = useState('');
+  const [petName, setPetName] = useState('');
+  const [petSpecies, setPetSpecies] = useState('');
+  const [petBreed, setPetBreed] = useState('');
 
   const resolvedHouseId = useMemo(() => {
     if (selectedHouseId && houses.some((item) => item.id === selectedHouseId)) {
@@ -71,6 +103,14 @@ export const HouseProfileScreen = () => {
     const code = (error as { code?: string } | undefined)?.code;
     if (code === 'permission-denied') {
       return 'Sem permissão para alterar moradores desta casa. Verifique se sua conta está como proprietário.';
+    }
+
+    if (code === 'cloudinary-upload-failed') {
+      return 'Falha no upload do arquivo. O app tentou Cloudinary e fallback automático; confira conexão e regras do storage.';
+    }
+
+    if (code === 'supabase-storage-upload-failed') {
+      return 'Sem permissão para upload no Storage. Execute o bootstrap.sql para criar bucket/policies do `app-files`.';
     }
 
     if (code === 'operation-timeout') {
@@ -211,7 +251,7 @@ export const HouseProfileScreen = () => {
       );
 
       await withTimeout(loadHouseDetails(resolvedHouseId));
-      Alert.alert('Documento enviado', 'PDF enviado e vinculado à casa com sucesso.');
+      Alert.alert('Documento enviado', 'Arquivo enviado e vinculado à casa com sucesso.');
     } catch (error) {
       Alert.alert('Erro', errorMessage(error, 'Não foi possível enviar o documento.'));
     } finally {
@@ -230,10 +270,21 @@ export const HouseProfileScreen = () => {
     }
 
     const nome = residentName.trim();
-    const contato = residentContact.trim();
+    const contato = residentContact.trim() || residentPhone.trim() || residentEmail.trim();
+    const cpf = onlyDigits(residentCpf);
+    const telefone = residentPhone.trim();
+    const email = residentEmail.trim().toLowerCase();
+    const parentesco = residentRelation.trim();
+    const dataNascimento = residentBirthDate.trim();
+    const observacoes = residentNotes.trim();
 
     if (!nome) {
       Alert.alert('Campo obrigatório', 'Informe o nome do morador.');
+      return;
+    }
+
+    if (residentCpf.trim() && cpf.length !== 11) {
+      Alert.alert('CPF inválido', 'Informe um CPF válido com 11 dígitos.');
       return;
     }
 
@@ -244,12 +295,24 @@ export const HouseProfileScreen = () => {
         {
           nome,
           ...(contato ? { contato } : {}),
+          ...(cpf ? { cpf } : {}),
+          ...(telefone ? { telefone } : {}),
+          ...(email ? { email } : {}),
+          ...(parentesco ? { parentesco } : {}),
+          ...(dataNascimento ? { dataNascimento } : {}),
+          ...(observacoes ? { observacoes } : {}),
         },
       ];
       await withTimeout(updateHouseResidents(resolvedHouseId, nextMoradores));
       await withTimeout(loadHouseDetails(resolvedHouseId));
       setResidentName('');
       setResidentContact('');
+      setResidentCpf('');
+      setResidentPhone('');
+      setResidentEmail('');
+      setResidentRelation('');
+      setResidentBirthDate('');
+      setResidentNotes('');
       Alert.alert('Sucesso', 'Morador adicionado com sucesso.');
     } catch (error) {
       Alert.alert('Erro', errorMessage(error, 'Não foi possível cadastrar o morador.'));
@@ -270,6 +333,119 @@ export const HouseProfileScreen = () => {
       await withTimeout(loadHouseDetails(resolvedHouseId));
     } catch (error) {
       Alert.alert('Erro', errorMessage(error, 'Não foi possível remover o morador.'));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleAddVehicle = async () => {
+    if (!isOwner) {
+      return;
+    }
+
+    if (!resolvedHouseId) {
+      Alert.alert('Selecione uma casa', 'Escolha uma casa antes de adicionar placa.');
+      return;
+    }
+
+    const plate = vehiclePlate.trim().toUpperCase();
+    if (!plate) {
+      Alert.alert('Campo obrigatório', 'Informe a placa do veículo.');
+      return;
+    }
+
+    const currentVehicles = house?.veiculos ?? [];
+    const duplicated = currentVehicles.some((item) => String(item ?? '').trim().toUpperCase() === plate);
+    if (duplicated) {
+      Alert.alert('Duplicado', 'Essa placa já está cadastrada para esta casa.');
+      return;
+    }
+
+    try {
+      setActionLoading('addVehicle');
+      const nextVehicles = [...currentVehicles, plate];
+      await withTimeout(updateHouseVehicles(resolvedHouseId, nextVehicles));
+      await withTimeout(loadHouseDetails(resolvedHouseId));
+      setVehiclePlate('');
+      Alert.alert('Sucesso', 'Placa adicionada com sucesso.');
+    } catch (error) {
+      Alert.alert('Erro', errorMessage(error, 'Não foi possível cadastrar a placa.'));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRemoveVehicle = async (indexToRemove: number) => {
+    if (!isOwner || !resolvedHouseId) {
+      return;
+    }
+
+    try {
+      setActionLoading('removeVehicle');
+      const nextVehicles = (house?.veiculos ?? []).filter((_, index) => index !== indexToRemove);
+      await withTimeout(updateHouseVehicles(resolvedHouseId, nextVehicles));
+      await withTimeout(loadHouseDetails(resolvedHouseId));
+    } catch (error) {
+      Alert.alert('Erro', errorMessage(error, 'Não foi possível remover a placa.'));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleAddPet = async () => {
+    if (!isOwner) {
+      return;
+    }
+
+    if (!resolvedHouseId) {
+      Alert.alert('Selecione uma casa', 'Escolha uma casa antes de adicionar pet.');
+      return;
+    }
+
+    const nome = petName.trim();
+    const especie = petSpecies.trim();
+    const raca = petBreed.trim();
+
+    if (!nome || !especie) {
+      Alert.alert('Campos obrigatórios', 'Informe nome e espécie do pet.');
+      return;
+    }
+
+    try {
+      setActionLoading('addPet');
+      const nextPets = [
+        ...(house?.pets ?? []),
+        {
+          nome,
+          especie,
+          ...(raca ? { raca } : {}),
+        },
+      ];
+      await withTimeout(updateHousePets(resolvedHouseId, nextPets));
+      await withTimeout(loadHouseDetails(resolvedHouseId));
+      setPetName('');
+      setPetSpecies('');
+      setPetBreed('');
+      Alert.alert('Sucesso', 'Pet adicionado com sucesso.');
+    } catch (error) {
+      Alert.alert('Erro', errorMessage(error, 'Não foi possível cadastrar o pet.'));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRemovePet = async (indexToRemove: number) => {
+    if (!isOwner || !resolvedHouseId) {
+      return;
+    }
+
+    try {
+      setActionLoading('removePet');
+      const nextPets = (house?.pets ?? []).filter((_, index) => index !== indexToRemove);
+      await withTimeout(updateHousePets(resolvedHouseId, nextPets));
+      await withTimeout(loadHouseDetails(resolvedHouseId));
+    } catch (error) {
+      Alert.alert('Erro', errorMessage(error, 'Não foi possível remover o pet.'));
     } finally {
       setActionLoading(null);
     }
@@ -348,22 +524,15 @@ export const HouseProfileScreen = () => {
           <Text style={styles.cardTitle}>Selecionar casa</Text>
           {houses.length ? (
             <>
-              <View style={styles.chips}>
-                {houses.map((item) => (
-                  <Pressable
-                    key={item.id}
-                    style={[styles.chip, selectedHouseId === item.id && styles.chipActive]}
-                    onPress={async () => {
-                      setSelectedHouseId(item.id);
-                      await loadHouseDetails(item.id);
-                    }}
-                  >
-                    <Text style={[styles.chipText, selectedHouseId === item.id && styles.chipTextActive]}>
-                      {item.nome || item.id}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
+              <AppSelect
+                label="Casa"
+                value={selectedHouseId ?? houses[0].id}
+                onChange={(value) => {
+                  setSelectedHouseId(value);
+                  void loadHouseDetails(value);
+                }}
+                options={houses.map((item) => ({ label: item.nome || item.id, value: item.id }))}
+              />
               <AppButton
                 label="Adicionar nova casa"
                 onPress={handleCreateHouse}
@@ -395,8 +564,6 @@ export const HouseProfileScreen = () => {
         <Text style={styles.infoLine}>Número: {house?.numero ?? '-'}</Text>
         <Text style={styles.infoLine}>Aluguel: R$ {house?.aluguelMensal ?? 0}</Text>
         <Text style={styles.infoLine}>Vencimento: dia {house?.diaVencimento ?? '-'}</Text>
-        <Text style={styles.infoLine}>Inquilino: {house?.inquilinoNome ?? '-'}</Text>
-        <Text style={styles.infoLine}>CPF: {house?.inquilinoCpf ?? '-'}</Text>
         <Text style={styles.infoLine}>Início do contrato: {formatDateBR(house?.dataInicioContrato)}</Text>
       </AppCard>
 
@@ -416,6 +583,47 @@ export const HouseProfileScreen = () => {
               onChangeText={setResidentContact}
               placeholder="Telefone ou e-mail"
             />
+            <Text style={styles.ownerExtraFieldsTitle}>Dados importantes (proprietário)</Text>
+            <AppInput
+              label="CPF"
+              value={residentCpf}
+              onChangeText={setResidentCpf}
+              placeholder="Somente números"
+              keyboardType="numeric"
+            />
+            <AppInput
+              label="Telefone"
+              value={residentPhone}
+              onChangeText={setResidentPhone}
+              placeholder="(DDD) 9xxxx-xxxx"
+              keyboardType="phone-pad"
+            />
+            <AppInput
+              label="E-mail"
+              value={residentEmail}
+              onChangeText={setResidentEmail}
+              placeholder="morador@email.com"
+              keyboardType="email-address"
+            />
+            <AppInput
+              label="Parentesco / vínculo"
+              value={residentRelation}
+              onChangeText={setResidentRelation}
+              placeholder="Ex: titular, cônjuge, filho"
+            />
+            <AppInput
+              label="Data de nascimento"
+              value={residentBirthDate}
+              onChangeText={setResidentBirthDate}
+              placeholder="dd/mm/aaaa"
+            />
+            <AppInput
+              label="Observações"
+              value={residentNotes}
+              onChangeText={setResidentNotes}
+              placeholder="Informações úteis sobre o morador"
+              multiline
+            />
             <AppButton
               label="Adicionar morador"
               onPress={handleAddResident}
@@ -428,7 +636,17 @@ export const HouseProfileScreen = () => {
           house.moradores.map((morador, index) => (
             <View key={`${morador.nome}-${index}`} style={styles.itemRow}>
               <Text style={styles.itemTitle}>{morador.nome}</Text>
-              <Text style={styles.itemText}>{morador.contato ?? 'Sem contato'}</Text>
+              <Text style={styles.itemText}>Contato: {morador.contato ?? morador.telefone ?? morador.email ?? 'Sem contato'}</Text>
+              {isOwner && morador.cpf ? <Text style={styles.itemText}>CPF: {formatCpf(morador.cpf)}</Text> : null}
+              {isOwner && morador.telefone ? <Text style={styles.itemText}>Telefone: {morador.telefone}</Text> : null}
+              {isOwner && morador.email ? <Text style={styles.itemText}>E-mail: {morador.email}</Text> : null}
+              {isOwner && morador.parentesco ? <Text style={styles.itemText}>Vínculo: {morador.parentesco}</Text> : null}
+              {isOwner && morador.dataNascimento ? (
+                <Text style={styles.itemText}>Nascimento: {morador.dataNascimento}</Text>
+              ) : null}
+              {isOwner && morador.observacoes ? (
+                <Text style={styles.itemText}>Observações: {morador.observacoes}</Text>
+              ) : null}
               {isOwner ? (
                 <Pressable onPress={() => handleRemoveResident(index)} style={styles.removeResidentButton}>
                   <Text style={styles.removeResidentText}>Remover</Text>
@@ -446,13 +664,81 @@ export const HouseProfileScreen = () => {
 
       <AppCard>
         <Text style={styles.cardTitle}>Veículos e pets</Text>
-        <Text style={styles.infoLine}>Placas: {house?.veiculos?.join(', ') || 'Não informado'}</Text>
-        <Text style={styles.infoLine}>
-          Pets:{' '}
-          {house?.pets?.length
-            ? house.pets.map((pet) => `${pet.nome} (${pet.especie})`).join(', ')
-            : 'Não informado'}
-        </Text>
+        {isOwner ? (
+          <View style={styles.residentForm}>
+            <AppInput
+              label="Placa do veículo"
+              value={vehiclePlate}
+              onChangeText={setVehiclePlate}
+              placeholder="Ex: ABC1D23"
+            />
+            <AppButton
+              label="Adicionar placa"
+              onPress={handleAddVehicle}
+              loading={actionLoading === 'addVehicle'}
+            />
+          </View>
+        ) : null}
+
+        {house?.veiculos?.length ? (
+          house.veiculos.map((placa, index) => (
+            <View key={`${placa}-${index}`} style={styles.itemRow}>
+              <Text style={styles.itemTitle}>{placa}</Text>
+              {isOwner ? (
+                <Pressable onPress={() => handleRemoveVehicle(index)} style={styles.removeResidentButton}>
+                  <Text style={styles.removeResidentText}>Remover</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.infoLine}>Placas: Não informado</Text>
+        )}
+
+        {isOwner ? (
+          <View style={styles.residentForm}>
+            <AppInput
+              label="Nome do pet"
+              value={petName}
+              onChangeText={setPetName}
+              placeholder="Ex: Thor"
+            />
+            <AppInput
+              label="Espécie"
+              value={petSpecies}
+              onChangeText={setPetSpecies}
+              placeholder="Ex: Cão"
+            />
+            <AppInput
+              label="Raça (opcional)"
+              value={petBreed}
+              onChangeText={setPetBreed}
+              placeholder="Ex: Shih-tzu"
+            />
+            <AppButton
+              label="Adicionar pet"
+              onPress={handleAddPet}
+              loading={actionLoading === 'addPet'}
+            />
+          </View>
+        ) : null}
+
+        {house?.pets?.length ? (
+          house.pets.map((pet, index) => (
+            <View key={`${pet.nome}-${index}`} style={styles.itemRow}>
+              <Text style={styles.itemTitle}>{pet.nome}</Text>
+              <Text style={styles.itemText}>Espécie: {pet.especie}</Text>
+              {pet.raca ? <Text style={styles.itemText}>Raça: {pet.raca}</Text> : null}
+              {isOwner ? (
+                <Pressable onPress={() => handleRemovePet(index)} style={styles.removeResidentButton}>
+                  <Text style={styles.removeResidentText}>Remover</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.infoLine}>Pets: Não informado</Text>
+        )}
       </AppCard>
 
       <AppCard>
@@ -483,33 +769,12 @@ export const HouseProfileScreen = () => {
 
 const styles = StyleSheet.create({
   cardTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     color: palette.gray900,
+    textTransform: 'uppercase',
   },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  chip: {
-    borderWidth: 1,
-    borderColor: palette.gray300,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  chipActive: {
-    borderColor: palette.greenDark,
-    backgroundColor: palette.greenDark,
-  },
-  chipText: {
-    color: palette.gray900,
-    fontWeight: '700',
-  },
-  chipTextActive: {
-    color: palette.white,
-  },
+
   houseImage: {
     width: '100%',
     height: 180,
@@ -521,6 +786,12 @@ const styles = StyleSheet.create({
   },
   residentForm: {
     gap: spacing.sm,
+  },
+  ownerExtraFieldsTitle: {
+    color: palette.gray900,
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: spacing.xs,
   },
   itemRow: {
     borderWidth: 1,
@@ -535,16 +806,18 @@ const styles = StyleSheet.create({
   },
   itemText: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 14,
   },
   removeResidentButton: {
     alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 4,
   },
   removeResidentText: {
     color: palette.danger,
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 14,
   },
   docRow: {
     borderWidth: 1,

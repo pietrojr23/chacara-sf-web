@@ -1,8 +1,14 @@
 import { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { palette, radii, spacing } from '../constants/theme';
 
-export const AppCard = ({ children }: { children: ReactNode }) => <View style={styles.card}>{children}</View>;
+export const AppCard = ({
+  children,
+  style,
+}: {
+  children: ReactNode;
+  style?: StyleProp<ViewStyle>;
+}) => <View style={[styles.card, style]}>{children}</View>;
 
 const styles = StyleSheet.create({
   card: {

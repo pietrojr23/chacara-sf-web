@@ -143,7 +143,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 15,
     color: palette.gray700,
   },
   form: {

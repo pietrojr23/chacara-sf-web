@@ -14,12 +14,14 @@ import {
   updateDoc,
   where,
 } from './firestoreLiteCompat';
-import { format } from 'date-fns';
+import { addMonths, differenceInCalendarDays, format, startOfDay } from 'date-fns';
 import {
   AppConfig,
   AppUser,
   CameraConfig,
   ChatMessage,
+  PrivateChatThread,
+  PrivateChatThreadStatus,
   EmergencyContact,
   GateStatus,
   HouseDocument,
@@ -27,10 +29,12 @@ import {
   MaintenanceTicket,
   Notice,
   RentalPayment,
+  RentalStatus,
   Visitor,
 } from '../types/models';
 import { getFirebaseDb } from './firebase';
 import { sendPushToUsers } from './notificationService';
+import { buildPrivateChatId } from '../utils/chat';
 
 const db = getFirebaseDb();
 
@@ -128,13 +132,27 @@ const normalizeHouse = (id: string, data: DocumentData): House => {
 
           const record = item as Record<string, unknown>;
           const nome = String(record.nome ?? record.name ?? record.moradorNome ?? '').trim();
-          const contatoRaw = record.contato ?? record.telefone ?? record.phone;
+          const telefone = normalizeOptionalString(record.telefone ?? record.phone);
+          const email = normalizeOptionalString(record.email ?? record.mail);
+          const contatoRaw = record.contato ?? telefone ?? email;
           const fotoRaw = record.fotoUrl ?? record.fotoURL ?? record.photoUrl;
+          const cpfRaw = String(record.cpf ?? record.CPF ?? '').replace(/\D/g, '');
+          const parentesco = normalizeOptionalString(record.parentesco ?? record.relacao ?? record.relacionamento);
+          const dataNascimento = normalizeOptionalString(
+            record.dataNascimento ?? record.nascimento ?? record.birthDate,
+          );
+          const observacoes = normalizeOptionalString(record.observacoes ?? record.observacao ?? record.notas);
 
           return {
             nome,
             contato: contatoRaw ? String(contatoRaw).trim() : undefined,
             fotoUrl: fotoRaw ? String(fotoRaw).trim() : undefined,
+            cpf: cpfRaw || undefined,
+            telefone,
+            email,
+            parentesco,
+            dataNascimento,
+            observacoes,
           };
         })
         .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -181,6 +199,12 @@ const sanitizeResidentsForWrite = (moradores: NonNullable<House['moradores']>) =
       const nome = String(item.nome ?? '').trim();
       const contato = item.contato ? String(item.contato).trim() : '';
       const fotoUrl = item.fotoUrl ? String(item.fotoUrl).trim() : '';
+      const cpf = String(item.cpf ?? '').replace(/\D/g, '').trim();
+      const telefone = item.telefone ? String(item.telefone).trim() : '';
+      const email = item.email ? String(item.email).trim() : '';
+      const parentesco = item.parentesco ? String(item.parentesco).trim() : '';
+      const dataNascimento = item.dataNascimento ? String(item.dataNascimento).trim() : '';
+      const observacoes = item.observacoes ? String(item.observacoes).trim() : '';
 
       if (!nome) {
         return null;
@@ -190,9 +214,57 @@ const sanitizeResidentsForWrite = (moradores: NonNullable<House['moradores']>) =
         nome,
         ...(contato ? { contato } : {}),
         ...(fotoUrl ? { fotoUrl } : {}),
+        ...(cpf ? { cpf } : {}),
+        ...(telefone ? { telefone } : {}),
+        ...(email ? { email } : {}),
+        ...(parentesco ? { parentesco } : {}),
+        ...(dataNascimento ? { dataNascimento } : {}),
+        ...(observacoes ? { observacoes } : {}),
       };
     })
-    .filter((item): item is { nome: string; contato?: string; fotoUrl?: string } => Boolean(item));
+    .filter((item): item is {
+      nome: string;
+      contato?: string;
+      fotoUrl?: string;
+      cpf?: string;
+      telefone?: string;
+      email?: string;
+      parentesco?: string;
+      dataNascimento?: string;
+      observacoes?: string;
+    } => Boolean(item));
+
+const sanitizeVehiclesForWrite = (veiculos: NonNullable<House['veiculos']>) =>
+  Array.from(
+    new Set(
+      veiculos
+        .map((item) => String(item ?? '').trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  );
+
+const sanitizePetsForWrite = (pets: NonNullable<House['pets']>) =>
+  pets
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+
+      const nome = String(item.nome ?? '').trim();
+      const especie = String(item.especie ?? '').trim();
+      const raca = item.raca ? String(item.raca).trim() : '';
+
+      if (!nome || !especie) {
+        return null;
+      }
+
+      return {
+        nome,
+        especie,
+        ...(raca ? { raca } : {}),
+      };
+    })
+    .filter((item): item is { nome: string; especie: string; raca?: string } => Boolean(item));
 
 const normalizeCameraConfigs = (value: unknown): CameraConfig[] => {
   if (!Array.isArray(value)) {
@@ -209,6 +281,9 @@ const normalizeCameraConfigs = (value: unknown): CameraConfig[] => {
       const nome = String(row.nome ?? '').trim();
       const rtspUrl = String(row.rtspUrl ?? row.url ?? '').trim();
       const playbackUrl = String(row.playbackUrl ?? row.hlsUrl ?? row.streamUrl ?? '').trim();
+      const playbackUrlExternal = String(
+        row.playbackUrlExternal ?? row.hlsUrlExternal ?? row.externalPlaybackUrl ?? '',
+      ).trim();
       const casasPermitidas = Array.isArray(row.casasPermitidas)
         ? row.casasPermitidas.map((houseId) => String(houseId).trim()).filter(Boolean)
         : [];
@@ -222,6 +297,7 @@ const normalizeCameraConfigs = (value: unknown): CameraConfig[] => {
         nome,
         rtspUrl,
         playbackUrl: playbackUrl || undefined,
+        playbackUrlExternal: playbackUrlExternal || undefined,
         casasPermitidas,
         ativo: normalizeBoolean(row.ativo, true),
         criadoEm: normalizeOptionalString(row.criadoEm),
@@ -234,6 +310,34 @@ const normalizeCameraConfigs = (value: unknown): CameraConfig[] => {
 };
 
 const currentCompetencia = () => format(new Date(), 'yyyy-MM');
+
+const currencyFormatter = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+});
+
+const toCurrencyBRL = (value: number) => currencyFormatter.format(Number(value || 0));
+
+const getDaysInMonth = (year: number, monthZeroBased: number) =>
+  new Date(year, monthZeroBased + 1, 0).getDate();
+
+const getNextDueDate = (today: Date, dueDayRaw: number) => {
+  const dueDay = Math.min(31, Math.max(1, Math.trunc(Number(dueDayRaw || 1))));
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth();
+  const currentMonthDayLimit = getDaysInMonth(currentYear, currentMonth);
+  let dueDate = new Date(currentYear, currentMonth, Math.min(dueDay, currentMonthDayLimit));
+
+  if (dueDate <= today) {
+    const nextMonthDate = addMonths(new Date(currentYear, currentMonth, 1), 1);
+    const nextYear = nextMonthDate.getFullYear();
+    const nextMonth = nextMonthDate.getMonth();
+    const nextMonthDayLimit = getDaysInMonth(nextYear, nextMonth);
+    dueDate = new Date(nextYear, nextMonth, Math.min(dueDay, nextMonthDayLimit));
+  }
+
+  return startOfDay(dueDate);
+};
 
 const subscribeByPolling = <T>(
   fetcher: () => Promise<T>,
@@ -326,6 +430,18 @@ export const getGlobalConfig = async (): Promise<AppConfig> => {
     return {
       propriedadeNome: 'Chácara São Francisco',
       chavePix: '',
+      headlights: [],
+      tenantGateAccess: {
+        enabled: true,
+        defaultWindowStart: '06:00',
+        defaultWindowEnd: '23:00',
+        defaultCooldownSeconds: 30,
+        defaultMaxOpensPerDay: 10,
+        defaultRequireProximity: true,
+        defaultMaxDistanceMeters: 200,
+        defaultRequireBiometric: true,
+        houseRules: [],
+      },
       tarifaEnergia: 0,
       temaEscuroAtivo: false,
       notificacoes: {
@@ -364,6 +480,7 @@ export const saveCameraConfigs = async (items: CameraConfig[]) => {
     nome: item.nome,
     rtspUrl: item.rtspUrl,
     playbackUrl: item.playbackUrl ?? null,
+    playbackUrlExternal: item.playbackUrlExternal ?? null,
     casasPermitidas: item.casasPermitidas,
     ativo: item.ativo,
     criadoEm: item.criadoEm ?? new Date().toISOString(),
@@ -434,6 +551,36 @@ export const updateHouseResidents = async (
   );
 };
 
+export const updateHouseVehicles = async (
+  houseId: string,
+  veiculos: NonNullable<House['veiculos']>,
+) => {
+  const normalizedVehicles = sanitizeVehiclesForWrite(veiculos);
+
+  await setDoc(
+    doc(db, 'casas', houseId),
+    {
+      veiculos: normalizedVehicles,
+    },
+    { merge: true },
+  );
+};
+
+export const updateHousePets = async (
+  houseId: string,
+  pets: NonNullable<House['pets']>,
+) => {
+  const normalizedPets = sanitizePetsForWrite(pets);
+
+  await setDoc(
+    doc(db, 'casas', houseId),
+    {
+      pets: normalizedPets,
+    },
+    { merge: true },
+  );
+};
+
 export const getHouseDocuments = async (houseId: string): Promise<HouseDocument[]> => {
   const snapshot = await getDocs(
     query(collection(db, 'documentos', houseId, 'docs'), orderBy('criadoEm', 'desc'), limit(40)),
@@ -460,19 +607,91 @@ export const upsertHouseDocument = async (houseId: string, payload: HouseDocumen
   );
 };
 
+const getPaymentType = (paymentId: string, tipo?: RentalPayment['tipo']): NonNullable<RentalPayment['tipo']> =>
+  tipo === 'luz' || paymentId.startsWith('luz-') ? 'luz' : 'aluguel';
+
+const resolvePaymentCompetencia = (
+  paymentId: string,
+  competencia?: string,
+  tipo?: RentalPayment['tipo'],
+) => {
+  const fallback = getPaymentType(paymentId, tipo) === 'luz'
+    ? paymentId.replace(/^luz-/, '').trim()
+    : paymentId.trim();
+  return String(competencia ?? fallback).trim();
+};
+
+const getCanonicalPaymentId = (params: { paymentId: string; competencia?: string; tipo?: RentalPayment['tipo'] }) => {
+  const tipo = getPaymentType(params.paymentId, params.tipo);
+  const competencia = resolvePaymentCompetencia(params.paymentId, params.competencia, tipo);
+  if (!competencia) {
+    return params.paymentId;
+  }
+
+  return tipo === 'luz' ? `luz-${competencia}` : competencia;
+};
+
+const getPaymentStatusScore = (status?: RentalStatus) => {
+  if (status === 'pago') {
+    return 4;
+  }
+  if (status === 'aguardando_confirmacao') {
+    return 3;
+  }
+  if (status === 'vencido') {
+    return 2;
+  }
+  return 1;
+};
+
+const shouldReplacePaymentRecord = (current: RentalPayment, candidate: RentalPayment) => {
+  const candidateScore = getPaymentStatusScore(candidate.status);
+  const currentScore = getPaymentStatusScore(current.status);
+  if (candidateScore !== currentScore) {
+    return candidateScore > currentScore;
+  }
+
+  const candidateDate = new Date(String(candidate.dataPagamento ?? '')).getTime();
+  const currentDate = new Date(String(current.dataPagamento ?? '')).getTime();
+  if (Number.isFinite(candidateDate) && Number.isFinite(currentDate) && candidateDate !== currentDate) {
+    return candidateDate > currentDate;
+  }
+
+  const candidateCanonicalId = getCanonicalPaymentId({
+    paymentId: candidate.id,
+    competencia: candidate.competencia,
+    tipo: candidate.tipo,
+  });
+  return candidate.id === candidateCanonicalId && current.id !== candidateCanonicalId;
+};
+
 export const getRentalPayments = async (houseId: string): Promise<RentalPayment[]> => {
   const paymentsRef = collection(db, 'alugueis', houseId, 'pagamentos');
   const snapshot = await getDocs(query(paymentsRef, orderBy('competencia', 'desc')));
-
-  return snapshot.docs.map((item) => {
+  const mapped = snapshot.docs.map((item) => {
     const data = item.data();
+    const tipo = getPaymentType(item.id, data.tipo as RentalPayment['tipo']);
+    const competencia = resolvePaymentCompetencia(item.id, data.competencia as string | undefined, tipo);
 
     return {
       ...(data as RentalPayment),
       id: item.id,
+      tipo,
+      competencia,
       dataPagamento: toIso(data.dataPagamento),
-    };
+    } as RentalPayment;
   });
+
+  const dedupedByMonth = new Map<string, RentalPayment>();
+  mapped.forEach((payment) => {
+    const key = `${payment.tipo ?? 'aluguel'}:${payment.competencia}`;
+    const existing = dedupedByMonth.get(key);
+    if (!existing || shouldReplacePaymentRecord(existing, payment)) {
+      dedupedByMonth.set(key, payment);
+    }
+  });
+
+  return Array.from(dedupedByMonth.values()).sort((left, right) => right.competencia.localeCompare(left.competencia));
 };
 
 export const upsertRentalPayment = async (
@@ -480,7 +699,19 @@ export const upsertRentalPayment = async (
   paymentId: string,
   payload: Partial<RentalPayment>,
 ) => {
-  await setDoc(doc(db, 'alugueis', houseId, 'pagamentos', paymentId), payload, {
+  const canonicalType = getPaymentType(paymentId, payload.tipo);
+  const canonicalCompetencia = resolvePaymentCompetencia(paymentId, payload.competencia, canonicalType);
+  const canonicalPaymentId = getCanonicalPaymentId({
+    paymentId,
+    competencia: canonicalCompetencia,
+    tipo: canonicalType,
+  });
+
+  await setDoc(doc(db, 'alugueis', houseId, 'pagamentos', canonicalPaymentId), {
+    ...payload,
+    tipo: canonicalType,
+    ...(canonicalCompetencia ? { competencia: canonicalCompetencia } : {}),
+  }, {
     merge: true,
   });
 
@@ -493,11 +724,11 @@ export const upsertRentalPayment = async (
         topic: 'financeiro',
         userIds: tenantIds,
         title: 'Pagamento confirmado',
-        body: `Seu pagamento da competência ${paymentId} foi confirmado.`,
+        body: `Seu pagamento da competência ${canonicalCompetencia || paymentId} foi confirmado.`,
         data: {
           type: 'payment_confirmed',
           houseId,
-          paymentId,
+          paymentId: canonicalPaymentId,
         },
       });
     } catch (error) {
@@ -508,7 +739,12 @@ export const upsertRentalPayment = async (
   }
 };
 
-export const markPaymentAsNotifiedByTenant = async (houseId: string, paymentId: string, userId: string) => {
+export const markPaymentAsNotifiedByTenant = async (
+  houseId: string,
+  paymentId: string,
+  userId: string,
+  comprovantePagamentoUrl?: string,
+) => {
   await setDoc(
     doc(db, 'alugueis', houseId, 'pagamentos', paymentId),
     {
@@ -516,6 +752,7 @@ export const markPaymentAsNotifiedByTenant = async (houseId: string, paymentId: 
       marcadoComoPagoPeloInquilino: true,
       confirmadoPeloInquilinoEm: serverTimestamp(),
       confirmadoPeloInquilinoId: userId,
+      ...(comprovantePagamentoUrl ? { comprovantePagamentoUrl } : {}),
     },
     { merge: true },
   );
@@ -715,10 +952,30 @@ export const getNotices = async (params: {
       };
     })
     .filter((notice) => params.isOwner || !notice.alvoCasaId || notice.alvoCasaId === params.houseId)
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    .sort((a, b) => {
+      const pinnedDiff = Number(b.pinned) - Number(a.pinned);
+      if (pinnedDiff !== 0) {
+        return pinnedDiff;
+      }
+      return b.criadoEm.localeCompare(a.criadoEm);
+    });
 };
 
 export const publishNotice = async (payload: Omit<Notice, 'id' | 'criadoEm' | 'leitores'>) => {
+  if (payload.pinned) {
+    const pinnedSnapshot = await getDocs(
+      query(collection(db, 'avisos'), where('pinned', '==', true)),
+    );
+
+    await Promise.all(
+      pinnedSnapshot.docs.map((item) =>
+        updateDoc(doc(db, 'avisos', item.id), {
+          pinned: false,
+        }),
+      ),
+    );
+  }
+
   const ref = await addDoc(collection(db, 'avisos'), {
     ...payload,
     leitores: [],
@@ -772,36 +1029,250 @@ const getGeneralChatMessagesRef = () =>
 const getPrivateChatMessagesRef = (chatId: string) =>
   collection(db, 'chat', 'privado', chatId, 'mensagens') as CollectionReference<DocumentData>;
 
-export const getGeneralMessages = async (): Promise<ChatMessage[]> => {
-  const snapshot = await getDocs(query(getGeneralChatMessagesRef(), orderBy('enviadoEm', 'asc'), limit(150)));
+const getPrivateChatThreadsCollectionRef = () =>
+  collection(db, 'chatThreads') as CollectionReference<DocumentData>;
 
-  return snapshot.docs.map((item) => {
+const getPrivateChatThreadRef = (threadId: string) =>
+  doc(db, 'chatThreads', threadId);
+
+const getLegacyPrivateChatThreadsConfigRef = () =>
+  doc(db, 'configuracoes', 'chatThreads');
+
+let privateChatThreadsCache: Record<string, DocumentData> | null = null;
+let privateChatThreadsStorageMode: 'unknown' | 'table' | 'legacy' = 'unknown';
+let privateChatThreadsMigratedFromLegacy = false;
+
+const normalizePrivateChatThread = (id: string, data: DocumentData): PrivateChatThread => ({
+  id,
+  baseChatId: normalizeOptionalString(data.baseChatId) ?? id,
+  ownerId: normalizeOptionalString(data.ownerId) ?? '',
+  tenantId: normalizeOptionalString(data.tenantId) ?? '',
+  participantIds: Array.isArray(data.participantIds)
+    ? data.participantIds.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+    : [],
+  title: normalizeOptionalString(data.title) ?? 'Conversa privada',
+  status: String(data.status ?? '').trim().toLowerCase() === 'concluido' ? 'concluido' : 'aberto',
+  createdById: normalizeOptionalString(data.createdById) ?? '',
+  createdByName: normalizeOptionalString(data.createdByName) ?? '',
+  createdAt: toIso(data.createdAt),
+  updatedAt: toIso(data.updatedAt),
+  closedAt: normalizeOptionalString(data.closedAt) ?? (typeof data.closedAt?.toDate === 'function'
+    ? data.closedAt.toDate().toISOString()
+    : undefined),
+  closedById: normalizeOptionalString(data.closedById),
+  closedByName: normalizeOptionalString(data.closedByName),
+  autoTitleGenerated: normalizeBoolean(data.autoTitleGenerated, false),
+  autoTitleUpdatedAt:
+    normalizeOptionalString(data.autoTitleUpdatedAt)
+    ?? (typeof data.autoTitleUpdatedAt?.toDate === 'function'
+      ? data.autoTitleUpdatedAt.toDate().toISOString()
+      : undefined),
+  autoTitleMessageCount: Number.isFinite(Number(data.autoTitleMessageCount ?? Number.NaN))
+    ? Number(data.autoTitleMessageCount)
+    : undefined,
+});
+
+const extractBasePrivateChatId = (chatId: string) => {
+  const raw = String(chatId ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  const separatorIndex = raw.indexOf('__');
+  if (separatorIndex < 0) {
+    return raw;
+  }
+
+  return raw.slice(0, separatorIndex);
+};
+
+const isPrivateChatThreadsTableUnavailableError = (error: unknown) => {
+  const value = error as { code?: unknown; message?: unknown } | undefined;
+  const code = String(value?.code ?? '').trim().toLowerCase();
+  const message = String(value?.message ?? '').trim().toLowerCase();
+
+  if (code === '42p01' || code === 'route-not-mapped') {
+    return true;
+  }
+
+  return message.includes('chat_threads') && message.includes('exist');
+};
+
+const getLegacyPrivateChatThreadsMap = async (): Promise<Record<string, DocumentData>> => {
+  const snapshot = await getDoc(getLegacyPrivateChatThreadsConfigRef());
+  if (!snapshot.exists()) {
+    return {};
+  }
+
+  const raw = snapshot.data().threadsById;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+
+  return { ...(raw as Record<string, DocumentData>) };
+};
+
+const saveLegacyPrivateChatThreadsMap = async (threadsById: Record<string, DocumentData>) => {
+  await setDoc(
+    getLegacyPrivateChatThreadsConfigRef(),
+    {
+      threadsById,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+};
+
+const getTablePrivateChatThreadsMap = async (): Promise<Record<string, DocumentData>> => {
+  const snapshot = await getDocs(query(getPrivateChatThreadsCollectionRef(), orderBy('updatedAt', 'desc'), limit(5000)));
+  return snapshot.docs.reduce<Record<string, DocumentData>>((acc, item) => {
     const data = item.data();
+    if (data && typeof data === 'object') {
+      acc[item.id] = data;
+    }
+    return acc;
+  }, {});
+};
 
-    return {
-      ...(data as ChatMessage),
-      id: item.id,
-      chatId: 'geral',
-      enviadoEm: toIso(data.enviadoEm),
-    };
-  });
+const migrateLegacyPrivateChatThreadsToTable = async (legacyThreadsById: Record<string, DocumentData>) => {
+  const entries = Object.entries(legacyThreadsById).filter(
+    ([threadId, data]) => Boolean(String(threadId ?? '').trim()) && Boolean(data && typeof data === 'object'),
+  );
+  if (!entries.length) {
+    privateChatThreadsMigratedFromLegacy = true;
+    return;
+  }
+
+  await Promise.all(
+    entries.map(([threadId, data]) =>
+      setDoc(getPrivateChatThreadRef(threadId), data, { merge: true }),
+    ),
+  );
+  privateChatThreadsMigratedFromLegacy = true;
+};
+
+const getPrivateChatThreadsMap = async (): Promise<Record<string, DocumentData>> => {
+  if (privateChatThreadsStorageMode === 'legacy') {
+    const legacyThreads = await getLegacyPrivateChatThreadsMap();
+    privateChatThreadsCache = legacyThreads;
+    return { ...legacyThreads };
+  }
+
+  try {
+    let tableThreads = await getTablePrivateChatThreadsMap();
+    privateChatThreadsStorageMode = 'table';
+
+    if (!Object.keys(tableThreads).length && !privateChatThreadsMigratedFromLegacy) {
+      const legacyThreads = await getLegacyPrivateChatThreadsMap();
+      if (Object.keys(legacyThreads).length) {
+        await migrateLegacyPrivateChatThreadsToTable(legacyThreads);
+        tableThreads = await getTablePrivateChatThreadsMap();
+      } else {
+        privateChatThreadsMigratedFromLegacy = true;
+      }
+    }
+
+    privateChatThreadsCache = tableThreads;
+    return { ...tableThreads };
+  } catch (error) {
+    if (!isPrivateChatThreadsTableUnavailableError(error)) {
+      throw error;
+    }
+
+    privateChatThreadsStorageMode = 'legacy';
+    const legacyThreads = await getLegacyPrivateChatThreadsMap();
+    privateChatThreadsCache = legacyThreads;
+    return { ...legacyThreads };
+  }
+};
+
+const savePrivateChatThreadsMap = async (threadsById: Record<string, DocumentData>) => {
+  const previous = privateChatThreadsCache ?? {};
+  const changedEntries = Object.entries(threadsById).filter(([threadId, data]) => previous[threadId] !== data);
+
+  if (privateChatThreadsStorageMode !== 'legacy') {
+    try {
+      const entriesToPersist = changedEntries.length ? changedEntries : Object.entries(threadsById);
+      if (entriesToPersist.length) {
+        await Promise.all(
+          entriesToPersist.map(([threadId, data]) =>
+            setDoc(getPrivateChatThreadRef(threadId), data, { merge: true }),
+          ),
+        );
+      }
+      privateChatThreadsStorageMode = 'table';
+    } catch (error) {
+      if (!isPrivateChatThreadsTableUnavailableError(error)) {
+        throw error;
+      }
+      privateChatThreadsStorageMode = 'legacy';
+    }
+  }
+
+  try {
+    await saveLegacyPrivateChatThreadsMap(threadsById);
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[chat] falha ao sincronizar threads legado:', error);
+    }
+  }
+
+  privateChatThreadsCache = { ...threadsById };
+};
+
+const touchPrivateChatThread = async (threadId: string) => {
+  const normalizedThreadId = String(threadId ?? '').trim();
+  if (!normalizedThreadId) {
+    return;
+  }
+
+  const threadsById = await getPrivateChatThreadsMap();
+  const existing = threadsById[normalizedThreadId];
+  if (!existing || typeof existing !== 'object') {
+    return;
+  }
+
+  threadsById[normalizedThreadId] = {
+    ...existing,
+    updatedAt: new Date().toISOString(),
+  };
+  await savePrivateChatThreadsMap(threadsById);
+};
+
+export const getGeneralMessages = async (): Promise<ChatMessage[]> => {
+  const snapshot = await getDocs(query(getGeneralChatMessagesRef(), orderBy('enviadoEm', 'desc'), limit(150)));
+
+  return snapshot.docs
+    .map((item) => {
+      const data = item.data();
+
+      return {
+        ...(data as ChatMessage),
+        id: item.id,
+        chatId: 'geral',
+        enviadoEm: toIso(data.enviadoEm),
+      };
+    })
+    .sort((left, right) => left.enviadoEm.localeCompare(right.enviadoEm));
 };
 
 export const getPrivateMessages = async (chatId: string): Promise<ChatMessage[]> => {
   const snapshot = await getDocs(
-    query(getPrivateChatMessagesRef(chatId), orderBy('enviadoEm', 'asc'), limit(150)),
+    query(getPrivateChatMessagesRef(chatId), orderBy('enviadoEm', 'desc'), limit(150)),
   );
 
-  return snapshot.docs.map((item) => {
-    const data = item.data();
+  return snapshot.docs
+    .map((item) => {
+      const data = item.data();
 
-    return {
-      ...(data as ChatMessage),
-      id: item.id,
-      chatId,
-      enviadoEm: toIso(data.enviadoEm),
-    };
-  });
+      return {
+        ...(data as ChatMessage),
+        id: item.id,
+        chatId,
+        enviadoEm: toIso(data.enviadoEm),
+      };
+    })
+    .sort((left, right) => left.enviadoEm.localeCompare(right.enviadoEm));
 };
 
 export const subscribeGeneralMessages = (callback: (messages: ChatMessage[]) => void) =>
@@ -810,21 +1281,301 @@ export const subscribeGeneralMessages = (callback: (messages: ChatMessage[]) => 
 export const subscribePrivateMessages = (chatId: string, callback: (messages: ChatMessage[]) => void) =>
   subscribeByPolling(() => getPrivateMessages(chatId), callback, 2500);
 
+export const getPrivateChatThreadsForUser = async (userId: string): Promise<PrivateChatThread[]> => {
+  const normalizedUserId = String(userId ?? '').trim();
+  if (!normalizedUserId) {
+    return [];
+  }
+
+  const threadsById = await getPrivateChatThreadsMap();
+  return Object.entries(threadsById)
+    .map(([id, data]) => normalizePrivateChatThread(id, data))
+    .filter((thread) => thread.participantIds.includes(normalizedUserId))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+};
+
+export const subscribePrivateChatThreadsForUser = (
+  userId: string,
+  callback: (threads: PrivateChatThread[]) => void,
+) => subscribeByPolling(() => getPrivateChatThreadsForUser(userId), callback, 4000);
+
+export const getPrivateChatThreadById = async (threadId: string): Promise<PrivateChatThread | null> => {
+  const normalizedThreadId = String(threadId ?? '').trim();
+  if (!normalizedThreadId) {
+    return null;
+  }
+
+  const threadsById = await getPrivateChatThreadsMap();
+  const raw = threadsById[normalizedThreadId];
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  return normalizePrivateChatThread(normalizedThreadId, raw);
+};
+
+export const createPrivateChatThread = async (params: {
+  ownerId: string;
+  tenantId: string;
+  title: string;
+  createdById: string;
+  createdByName: string;
+}): Promise<PrivateChatThread> => {
+  const ownerId = String(params.ownerId ?? '').trim();
+  const tenantId = String(params.tenantId ?? '').trim();
+  const createdById = String(params.createdById ?? '').trim();
+  const createdByName = String(params.createdByName ?? '').trim() || 'Usuário';
+  const title = String(params.title ?? '').trim() || 'Novo assunto';
+
+  if (!ownerId || !tenantId || !createdById) {
+    throw new Error('Dados inválidos para criar a conversa privada.');
+  }
+
+  const baseChatId = buildPrivateChatId(ownerId, tenantId);
+  const now = new Date().toISOString();
+  const threadId = `${baseChatId}__${Date.now()}`;
+  const threadsById = await getPrivateChatThreadsMap();
+  threadsById[threadId] = {
+    baseChatId,
+    ownerId,
+    tenantId,
+    participantIds: [ownerId, tenantId],
+    title,
+    status: 'aberto',
+    createdById,
+    createdByName,
+    createdAt: now,
+    updatedAt: now,
+    autoTitleGenerated: false,
+    autoTitleUpdatedAt: '',
+    autoTitleMessageCount: 0,
+  };
+  await savePrivateChatThreadsMap(threadsById);
+
+  return {
+    id: threadId,
+    baseChatId,
+    ownerId,
+    tenantId,
+    participantIds: [ownerId, tenantId],
+    title,
+    status: 'aberto',
+    createdById,
+    createdByName,
+    createdAt: now,
+    updatedAt: now,
+    autoTitleGenerated: false,
+    autoTitleUpdatedAt: '',
+    autoTitleMessageCount: 0,
+  };
+};
+
+export const setPrivateChatThreadStatus = async (params: {
+  threadId: string;
+  status: PrivateChatThreadStatus;
+  actorId: string;
+  actorName: string;
+}) => {
+  const threadId = String(params.threadId ?? '').trim();
+  const actorId = String(params.actorId ?? '').trim();
+  const actorName = String(params.actorName ?? '').trim() || 'Usuário';
+  const status = params.status === 'concluido' ? 'concluido' : 'aberto';
+  const baseChatId = extractBasePrivateChatId(threadId);
+  const members = extractPrivateChatMembers(threadId);
+  const ownerIdFromMembers = members[0] ?? '';
+  const tenantIdFromMembers = members[1] ?? '';
+
+  if (!threadId || !actorId) {
+    throw new Error('Dados inválidos para atualizar o chat.');
+  }
+
+  const now = new Date().toISOString();
+  const threadsById = await getPrivateChatThreadsMap();
+  const currentRaw = threadsById[threadId];
+  const currentThread = currentRaw && typeof currentRaw === 'object'
+    ? normalizePrivateChatThread(threadId, currentRaw)
+    : null;
+  const resolvedTitle = currentThread?.title ?? 'Conversa privada';
+  const resolvedParticipants = currentThread?.participantIds?.length ? currentThread.participantIds : members;
+  const resolvedOwnerId = currentThread?.ownerId || ownerIdFromMembers;
+  const resolvedTenantId = currentThread?.tenantId || tenantIdFromMembers;
+  const createdById = currentThread?.createdById || actorId;
+  const createdByName = currentThread?.createdByName || actorName;
+  const createdAt = currentThread?.createdAt || now;
+  const autoTitleGenerated = Boolean(currentThread?.autoTitleGenerated);
+  const autoTitleUpdatedAt = String(currentThread?.autoTitleUpdatedAt ?? '').trim();
+  const autoTitleMessageCount = Number(currentThread?.autoTitleMessageCount ?? 0);
+
+  if (status === 'concluido') {
+    threadsById[threadId] = {
+      baseChatId,
+      ownerId: resolvedOwnerId,
+      tenantId: resolvedTenantId,
+      participantIds: resolvedParticipants,
+      title: resolvedTitle,
+      status: 'concluido',
+      createdById,
+      createdByName,
+      createdAt,
+      updatedAt: now,
+      closedAt: now,
+      closedById: actorId,
+      closedByName: actorName,
+      autoTitleGenerated,
+      autoTitleUpdatedAt,
+      autoTitleMessageCount,
+    };
+    await savePrivateChatThreadsMap(threadsById);
+    return;
+  }
+
+  threadsById[threadId] = {
+    baseChatId,
+    ownerId: resolvedOwnerId,
+    tenantId: resolvedTenantId,
+    participantIds: resolvedParticipants,
+    title: resolvedTitle,
+    status: 'aberto',
+    createdById,
+    createdByName,
+    createdAt,
+    updatedAt: now,
+    closedAt: '',
+    closedById: '',
+    closedByName: '',
+    autoTitleGenerated,
+    autoTitleUpdatedAt,
+    autoTitleMessageCount,
+  };
+  await savePrivateChatThreadsMap(threadsById);
+};
+
+export const updatePrivateChatThreadTitle = async (params: {
+  threadId: string;
+  title: string;
+  actorId: string;
+  actorName: string;
+  autoGenerated?: boolean;
+  messageCount?: number;
+}) => {
+  const threadId = String(params.threadId ?? '').trim();
+  const actorId = String(params.actorId ?? '').trim();
+  const actorName = String(params.actorName ?? '').trim() || 'Usuário';
+  const title = String(params.title ?? '').trim();
+  const autoGenerated = Boolean(params.autoGenerated);
+  const messageCount = Number(params.messageCount ?? 0);
+
+  if (!threadId || !actorId || !title) {
+    throw new Error('Dados inválidos para atualizar título do chat.');
+  }
+
+  const now = new Date().toISOString();
+  const threadsById = await getPrivateChatThreadsMap();
+  const currentRaw = threadsById[threadId];
+  const currentThread = currentRaw && typeof currentRaw === 'object'
+    ? normalizePrivateChatThread(threadId, currentRaw)
+    : null;
+
+  const baseChatId = currentThread?.baseChatId ?? extractBasePrivateChatId(threadId);
+  const members = extractPrivateChatMembers(threadId);
+  const ownerId = currentThread?.ownerId ?? members[0] ?? '';
+  const tenantId = currentThread?.tenantId ?? members[1] ?? '';
+  const participantIds = currentThread?.participantIds?.length ? currentThread.participantIds : members;
+  const createdById = currentThread?.createdById || actorId;
+  const createdByName = currentThread?.createdByName || actorName;
+  const createdAt = currentThread?.createdAt || now;
+  const status: PrivateChatThreadStatus = currentThread?.status === 'concluido' ? 'concluido' : 'aberto';
+
+  threadsById[threadId] = {
+    baseChatId,
+    ownerId,
+    tenantId,
+    participantIds,
+    title,
+    status,
+    createdById,
+    createdByName,
+    createdAt,
+    updatedAt: now,
+    closedAt: String(currentThread?.closedAt ?? ''),
+    closedById: String(currentThread?.closedById ?? ''),
+    closedByName: String(currentThread?.closedByName ?? ''),
+    autoTitleGenerated: autoGenerated ? true : Boolean(currentThread?.autoTitleGenerated),
+    autoTitleUpdatedAt: autoGenerated ? now : String(currentThread?.autoTitleUpdatedAt ?? ''),
+    autoTitleMessageCount: autoGenerated
+      ? (Number.isFinite(messageCount) ? messageCount : Number(currentThread?.autoTitleMessageCount ?? 0))
+      : Number(currentThread?.autoTitleMessageCount ?? 0),
+  };
+
+  await savePrivateChatThreadsMap(threadsById);
+};
+
+const extractPrivateChatMembers = (chatId: string) => {
+  const normalizedChatId = extractBasePrivateChatId(chatId);
+  const members = normalizedChatId.split('_').filter(Boolean);
+  if (members.length !== 2) {
+    return [] as string[];
+  }
+
+  return members;
+};
+
+const normalizePrivateChatId = (chatId: string, senderId: string, ownerId?: string) => {
+  if (chatId !== 'owner_private') {
+    return chatId;
+  }
+
+  if (!ownerId) {
+    return chatId;
+  }
+
+  return buildPrivateChatId(senderId, ownerId);
+};
+
 export const sendChatMessage = async (params: {
   chatId: string;
   isPrivate: boolean;
   text?: string;
   imageUrl?: string;
+  audioUrl?: string;
+  audioDurationMs?: number;
+  notifyUserIdsOverride?: string[];
+  replyTo?: {
+    messageId: string;
+    senderId: string;
+    senderName: string;
+    text?: string;
+    imageUrl?: string;
+    audioUrl?: string;
+  } | null;
   senderId: string;
   senderName: string;
   senderPhotoURL?: string;
 }) => {
-  const ref = params.isPrivate ? getPrivateChatMessagesRef(params.chatId) : getGeneralChatMessagesRef();
+  let targetChatId = params.chatId;
+  let users: AppUser[] = [];
+  let threadMeta: PrivateChatThread | null = null;
+
+  if (params.isPrivate) {
+    users = await getAllUsers();
+    const ownerId = users.find((user) => user.isOwner && user.ativo)?.id;
+    targetChatId = normalizePrivateChatId(params.chatId, params.senderId, ownerId);
+    try {
+      threadMeta = await getPrivateChatThreadById(targetChatId);
+    } catch {
+      threadMeta = null;
+    }
+  }
+
+  const ref = params.isPrivate ? getPrivateChatMessagesRef(targetChatId) : getGeneralChatMessagesRef();
 
   await addDoc(ref, {
-    chatId: params.chatId,
+    chatId: targetChatId,
     texto: params.text ?? null,
     imagemUrl: params.imageUrl ?? null,
+    audioUrl: params.audioUrl ?? null,
+    audioDurationMs: Number.isFinite(params.audioDurationMs) ? params.audioDurationMs : null,
+    replyTo: params.replyTo ?? null,
     enviadoPor: params.senderId,
     enviadoPorNome: params.senderName,
     enviadoPorFotoURL: params.senderPhotoURL ?? null,
@@ -832,23 +1583,28 @@ export const sendChatMessage = async (params: {
     enviadoEm: serverTimestamp(),
   });
 
-  try {
-    const users = await getAllUsers();
-    let recipients: string[] = [];
-
-    if (params.isPrivate) {
-      if (params.chatId === 'owner_private') {
-        recipients = users.filter((user) => user.ativo).map((user) => user.id);
-      } else {
-        recipients = params.chatId.split('_').filter(Boolean);
-      }
-    } else {
-      recipients = users.filter((user) => user.ativo).map((user) => user.id);
+  if (params.isPrivate && threadMeta) {
+    try {
+      await touchPrivateChatThread(targetChatId);
+    } catch {
+      // falha não bloqueia envio da mensagem
     }
+  }
+
+  try {
+    const usersFromScope = users.length ? users : await getAllUsers();
+    const recipients =
+      params.notifyUserIdsOverride?.filter(Boolean)?.length
+        ? params.notifyUserIdsOverride
+        : params.isPrivate
+          ? (threadMeta?.participantIds?.length ? threadMeta.participantIds : extractPrivateChatMembers(targetChatId))
+          : usersFromScope.filter((user) => user.ativo).map((user) => user.id);
 
     const body = params.text?.trim()
       ? params.text.trim().slice(0, 120)
-      : 'Enviou um arquivo no chat.';
+      : params.audioUrl
+        ? 'Enviou um áudio no chat.'
+        : 'Enviou um arquivo no chat.';
 
     notifyUsersSafe({
       topic: 'chat',
@@ -857,9 +1613,11 @@ export const sendChatMessage = async (params: {
       body,
       data: {
         type: 'chat_message',
-        chatId: params.chatId,
+        chatId: targetChatId,
+        chatTitle: threadMeta?.title ?? '',
         isPrivate: params.isPrivate,
         senderId: params.senderId,
+        senderName: params.senderName,
       },
     });
   } catch (error) {
@@ -931,6 +1689,139 @@ export const getTenantUsers = async (): Promise<AppUser[]> => {
 export const getAllUsers = async (): Promise<AppUser[]> => {
   const snapshot = await getDocs(query(collection(db, 'users'), limit(100)));
   return snapshot.docs.map((item) => normalizeAppUser(item.id, item.data()));
+};
+
+export const triggerAutomaticRentChatReminderIfNeeded = async (params?: { ownerUserId?: string; force?: boolean }) => {
+  const users = await getAllUsers();
+  const ownerId = params?.ownerUserId ?? users.find((user) => user.isOwner && user.ativo)?.id;
+  const ownerUser = users.find((user) => user.id === ownerId);
+
+  if (!ownerId) {
+    return { sentCount: 0 };
+  }
+
+  const activeTenants = users.filter((user) => !user.isOwner && user.ativo && user.casaId);
+  if (!activeTenants.length) {
+    return { sentCount: 0 };
+  }
+
+  const houses = await getAllHouses();
+  if (!houses.length) {
+    return { sentCount: 0 };
+  }
+
+  const trackerRef = doc(db, 'configuracoes', 'rentAutoReminder');
+  const trackerSnapshot = await getDoc(trackerRef);
+  const trackerRaw = trackerSnapshot.exists()
+    ? (trackerSnapshot.data() as { sentByHouseCompetencia?: Record<string, string> })
+    : {};
+  const sentByHouseCompetencia = { ...(trackerRaw.sentByHouseCompetencia ?? {}) };
+
+  const now = new Date().toISOString();
+  const today = startOfDay(new Date());
+  let sentCount = 0;
+
+  for (const house of houses) {
+    const houseId = String(house.id ?? '').trim();
+    if (!houseId) {
+      continue;
+    }
+
+    const dueDay = Number(house.diaVencimento ?? 0);
+    if (!Number.isFinite(dueDay) || dueDay <= 0) {
+      continue;
+    }
+
+    const nextDueDate = getNextDueDate(today, dueDay);
+    const daysUntilDue = differenceInCalendarDays(nextDueDate, today);
+    if (daysUntilDue !== 5) {
+      continue;
+    }
+
+    const competencia = format(nextDueDate, 'yyyy-MM');
+    const sentKey = `${houseId}:${competencia}`;
+    if (!params?.force && sentByHouseCompetencia[sentKey]) {
+      continue;
+    }
+
+    const paymentRef = doc(db, 'alugueis', houseId, 'pagamentos', competencia);
+    const paymentSnapshot = await getDoc(paymentRef);
+    if (paymentSnapshot.exists()) {
+      const status = String(paymentSnapshot.data().status ?? '').trim().toLowerCase();
+      if (status === 'pago' || status === 'aguardando_confirmacao') {
+        sentByHouseCompetencia[sentKey] = now;
+        continue;
+      }
+    }
+
+    const currentStatus = paymentSnapshot.exists()
+      ? String(paymentSnapshot.data().status ?? '').trim().toLowerCase()
+      : '';
+    const normalizedStatus: RentalPayment['status'] =
+      currentStatus === 'vencido'
+        ? 'vencido'
+        : currentStatus === 'aguardando_confirmacao'
+          ? 'aguardando_confirmacao'
+          : 'pendente';
+
+    await setDoc(
+      paymentRef,
+      {
+        competencia,
+        valor: Number(house.aluguelMensal ?? 0),
+        tipo: 'aluguel',
+        status: normalizedStatus,
+      } as Partial<RentalPayment>,
+      { merge: true },
+    );
+
+    const tenantsFromHouse = activeTenants.filter((tenant) => tenant.casaId === houseId);
+    if (!tenantsFromHouse.length) {
+      continue;
+    }
+
+    const dueDayLabel = nextDueDate.getDate();
+    const valorLabel = toCurrencyBRL(Number(house.aluguelMensal ?? 0));
+    const houseLabel = String(house.nome ?? house.numero ?? houseId).trim() || houseId;
+    const reminderText =
+      `Lembrete automático: faltam ${daysUntilDue} dias para o vencimento do aluguel ` +
+      `da competência ${competencia} da casa ${houseLabel} (dia ${dueDayLabel}). ` +
+      `Valor: ${valorLabel}. O boleto está disponível no menu Financeiro.`;
+
+    for (const tenant of tenantsFromHouse) {
+      try {
+        const privateChatId = buildPrivateChatId(ownerId, tenant.id);
+        await sendChatMessage({
+          chatId: privateChatId,
+          isPrivate: true,
+          text: reminderText,
+          senderId: ownerId,
+          senderName: ownerUser?.nome ?? 'Proprietário',
+          senderPhotoURL: ownerUser?.photoURL ?? undefined,
+          notifyUserIdsOverride: [tenant.id],
+        });
+        sentCount += 1;
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[rent-auto-reminder] falha ao enviar lembrete para inquilino:', tenant.id, error);
+        }
+      }
+    }
+
+    sentByHouseCompetencia[sentKey] = now;
+  }
+
+  await setDoc(
+    trackerRef,
+    {
+      sentByHouseCompetencia,
+      lastRunAt: now,
+      lastSentCount: sentCount,
+    },
+    { merge: true },
+  );
+
+  return { sentCount };
 };
 
 export const updateUserProfile = async (

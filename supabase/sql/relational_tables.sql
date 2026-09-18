@@ -86,6 +86,16 @@ create table if not exists public.chat_mensagens (
 
 create index if not exists chat_mensagens_chat_lookup_idx on public.chat_mensagens (chat_type, chat_id);
 
+create table if not exists public.chat_threads (
+  id text primary key,
+  data jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists chat_threads_updated_at_idx on public.chat_threads ((data->>'updatedAt'));
+create index if not exists chat_threads_base_chat_id_idx on public.chat_threads ((data->>'baseChatId'));
+
 create table if not exists public.casa_documentos (
   casa_id text not null,
   id text not null,
@@ -145,6 +155,10 @@ create or replace trigger trg_chat_mensagens_touch_updated_at
 before insert or update on public.chat_mensagens
 for each row execute function public.touch_updated_at();
 
+create or replace trigger trg_chat_threads_touch_updated_at
+before insert or update on public.chat_threads
+for each row execute function public.touch_updated_at();
+
 create or replace trigger trg_casa_documentos_touch_updated_at
 before insert or update on public.casa_documentos
 for each row execute function public.touch_updated_at();
@@ -163,6 +177,7 @@ alter table public.acessos enable row level security;
 alter table public.configuracoes enable row level security;
 alter table public.contatos_emergencia enable row level security;
 alter table public.chat_mensagens enable row level security;
+alter table public.chat_threads enable row level security;
 alter table public.casa_documentos enable row level security;
 alter table public.alugueis_pagamentos enable row level security;
 
@@ -211,6 +226,9 @@ create policy contatos_emergencia_all_authenticated on public.contatos_emergenci
 
 drop policy if exists chat_mensagens_all_authenticated on public.chat_mensagens;
 create policy chat_mensagens_all_authenticated on public.chat_mensagens for all to authenticated using (true) with check (true);
+
+drop policy if exists chat_threads_all_authenticated on public.chat_threads;
+create policy chat_threads_all_authenticated on public.chat_threads for all to authenticated using (true) with check (true);
 
 drop policy if exists casa_documentos_all_authenticated on public.casa_documentos;
 create policy casa_documentos_all_authenticated on public.casa_documentos for all to authenticated using (true) with check (true);

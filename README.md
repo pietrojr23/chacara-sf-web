@@ -115,4 +115,5 @@ Resumo:
 
 1. Suba o MediaMTX com Docker Compose.
 2. Configure as paths RTSP no `mediamtx.yml`.
-3. Use a URL HLS (`.../index.m3u8`) no campo **URL de reprodução interna** da aba `CAMERAS`.
+3. Use URL HLS (`.../index.m3u8`) no campo **URL de reprodução interna** da aba `CAMERAS`.
+4. Para acesso fora da rede local, suba o `cloudflared` (`docker compose --profile tunnel up -d`) e configure também **URL de reprodução externa** com endpoint público HTTPS (`https://.../index.m3u8`).

@@ -13,6 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
 import { AppButton } from '../../components/AppButton';
 import { AppInput } from '../../components/AppInput';
+import { AppSelect } from '../../components/AppSelect';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { SectionHeader } from '../../components/SectionHeader';
 import { palette, radii, spacing } from '../../constants/theme';
@@ -205,55 +206,39 @@ export const TicketFormScreen = ({ navigation }: Props) => {
       />
 
       <View style={styles.group}>
-        <Text style={styles.label}>Categoria</Text>
-        <View style={styles.chips}>
-          {categories.map((item) => (
-            <Pressable
-              key={item}
-              style={[styles.chip, categoria === item && styles.chipActive]}
-              onPress={() => setCategoria(item)}
-            >
-              <Text style={[styles.chipText, categoria === item && styles.chipTextActive]}>{item}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <AppSelect
+          label="Categoria"
+          value={categoria}
+          onChange={(value) => setCategoria(value as TicketCategory)}
+          options={categories.map((item) => ({ label: item, value: item }))}
+        />
       </View>
 
       <View style={styles.group}>
-        <Text style={styles.label}>Urgência</Text>
-        <View style={styles.chips}>
-          {urgencies.map((item) => (
-            <Pressable
-              key={item}
-              style={[styles.chip, urgencia === item && styles.chipActive]}
-              onPress={() => setUrgencia(item)}
-            >
-              <Text style={[styles.chipText, urgencia === item && styles.chipTextActive]}>{item}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <AppSelect
+          label="Urgência"
+          value={urgencia}
+          onChange={(value) => setUrgencia(value as TicketUrgency)}
+          options={urgencies.map((item) => ({ label: item, value: item }))}
+        />
       </View>
 
       <View style={styles.group}>
-        <Text style={styles.label}>Casa de origem</Text>
-
         {isOwner ? (
-          <View style={styles.chips}>
-            {houseOptions.map((item) => (
-              <Pressable
-                key={item.id}
-                style={[styles.chip, houseId === item.id && styles.chipActive]}
-                onPress={() => {
-                  setHouseId(item.id);
-                  setHouseName(item.nome);
-                }}
-              >
-                <Text style={[styles.chipText, houseId === item.id && styles.chipTextActive]}>{item.nome}</Text>
-              </Pressable>
-            ))}
-          </View>
+          <AppSelect
+            label="Casa de origem"
+            value={houseId}
+            onChange={(value) => {
+              setHouseId(value);
+              setHouseName(houseOptions.find((item) => item.id === value)?.nome ?? '');
+            }}
+            options={houseOptions.map((item) => ({ label: item.nome, value: item.id }))}
+          />
         ) : (
-          <Text style={styles.houseText}>{houseName || profile?.casaId || 'Casa não vinculada'}</Text>
+          <>
+            <Text style={styles.label}>Casa de origem</Text>
+            <Text style={styles.houseText}>{houseName || profile?.casaId || 'Casa não vinculada'}</Text>
+          </>
         )}
       </View>
 
@@ -294,32 +279,8 @@ const styles = StyleSheet.create({
   },
   label: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '700',
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  chip: {
-    borderWidth: 1,
-    borderColor: palette.gray300,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  chipActive: {
-    backgroundColor: palette.greenDark,
-    borderColor: palette.greenDark,
-  },
-  chipText: {
-    color: palette.gray900,
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  chipTextActive: {
-    color: palette.white,
   },
   houseText: {
     color: palette.gray900,
@@ -342,11 +303,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
+    minHeight: 44,
+    justifyContent: 'center',
     maxWidth: 170,
   },
   fileChipText: {
     color: palette.gray700,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '700',
   },
 });

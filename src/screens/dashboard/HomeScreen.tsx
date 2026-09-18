@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppCard } from '../../components/AppCard';
@@ -11,11 +11,17 @@ import { palette, radii, spacing } from '../../constants/theme';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAppConfig } from '../../contexts/AppConfigContext';
 import { useDataSync } from '../../contexts/DataSyncContext';
-import { getOwnerDashboardSummary, getTenantDashboardSummary } from '../../services/firestoreService';
+import {
+  getOwnerDashboardSummary,
+  getOwnerUser,
+  getTenantDashboardSummary,
+  sendChatMessage,
+} from '../../services/firestoreService';
 import { getWeatherForecast } from '../../services/weatherService';
 import { cacheKeys, getCache, saveCache } from '../../services/cacheService';
 import { formatCurrencyBRL, formatDateBR, countdownDays } from '../../utils/format';
 import { WeatherDay } from '../../types/models';
+import { buildPrivateChatId } from '../../utils/chat';
 
 const getWeatherIconName = (day: WeatherDay): keyof typeof MaterialIcons.glyphMap => {
   const icon = String(day.icon ?? '').toLowerCase();
@@ -56,6 +62,98 @@ const getWeatherIconColor = (iconName: keyof typeof MaterialIcons.glyphMap) => {
   return palette.gray700;
 };
 
+const withTimeout = async <T,>(task: Promise<T>, timeoutMs = 12000): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error('operation-timeout'));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([task, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
+const padDate = (value: number) => String(value).padStart(2, '0');
+
+const toLocalDateKey = (date: Date) => `${date.getFullYear()}-${padDate(date.getMonth() + 1)}-${padDate(date.getDate())}`;
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const formatDateOnlyBR = (isoDate: string) => {
+  const [yearRaw, monthRaw, dayRaw] = String(isoDate ?? '').split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return formatDateBR(isoDate);
+  }
+
+  return `${padDate(day)}/${padDate(month)}/${year}`;
+};
+
+const getWeatherDayLabel = (date: string) => {
+  const normalizedDate = String(date ?? '').slice(0, 10);
+  if (!normalizedDate) {
+    return 'Sem data';
+  }
+
+  const now = new Date();
+  const todayKey = toLocalDateKey(now);
+  const tomorrowKey = toLocalDateKey(addDays(now, 1));
+
+  if (normalizedDate === todayKey) {
+    return 'Hoje';
+  }
+
+  if (normalizedDate === tomorrowKey) {
+    return 'Amanhã';
+  }
+
+  return formatDateOnlyBR(normalizedDate);
+};
+
+const normalizeWeatherDescription = (value: string) => {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) {
+    return 'Sem previsão';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+};
+
+const formatTenantDueLabel = (dueDate?: string | null) => {
+  if (!dueDate) {
+    return 'Vencimento: Sem data';
+  }
+
+  const relative = countdownDays(dueDate);
+  if (!relative || relative === 'Sem data') {
+    return 'Vencimento: Sem data';
+  }
+
+  if (relative === 'em 0 dia' || relative === 'em 0 dias' || relative === 'há 0 dia' || relative === 'há 0 dias') {
+    return 'Vence hoje';
+  }
+
+  if (relative.startsWith('há ')) {
+    return `Vencido ${relative}`;
+  }
+
+  return `Próximo vencimento: ${relative}`;
+};
+
 export const HomeScreen = () => {
   const { profile } = useAuth();
   const { config } = useAppConfig();
@@ -75,6 +173,9 @@ export const HomeScreen = () => {
     latestNotices: Array<{ id: string; titulo?: string }>;
   } | null>(null);
   const [weather, setWeather] = useState<WeatherDay[]>([]);
+  const [weatherUpdatedAt, setWeatherUpdatedAt] = useState<string | null>(null);
+  const [ownerPrivateChatId, setOwnerPrivateChatId] = useState<string | null>(null);
+  const [sendingRemoteBatteryRequest, setSendingRemoteBatteryRequest] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const isOwner = Boolean(profile?.isOwner);
 
@@ -86,12 +187,13 @@ export const HomeScreen = () => {
     let ownerData = null;
     let tenantData = null;
     let forecastData: WeatherDay[] = [];
+    let weatherFetchedAt: string | null = null;
 
     try {
       setRefreshing(true);
       if (isOwner) {
         try {
-          const summary = await getOwnerDashboardSummary();
+          const summary = await withTimeout(getOwnerDashboardSummary(), 12000);
           setOwnerSummary(summary);
           ownerData = summary;
         } catch (error) {
@@ -99,7 +201,7 @@ export const HomeScreen = () => {
         }
       } else if (profile.casaId) {
         try {
-          const summary = await getTenantDashboardSummary(profile.casaId);
+          const summary = await withTimeout(getTenantDashboardSummary(profile.casaId), 12000);
           setTenantSummary(summary);
           tenantData = summary;
         } catch (error) {
@@ -109,26 +211,38 @@ export const HomeScreen = () => {
 
       if (Number.isFinite(config.latitude) && Number.isFinite(config.longitude)) {
         try {
-          const forecast = await getWeatherForecast(Number(config.latitude), Number(config.longitude));
+          const forecast = await withTimeout(
+            getWeatherForecast(Number(config.latitude), Number(config.longitude)),
+            12000,
+          );
           setWeather(forecast);
           forecastData = forecast;
+          weatherFetchedAt = new Date().toISOString();
+          setWeatherUpdatedAt(weatherFetchedAt);
         } catch (error) {
           console.warn('[HomeScreen] Falha ao carregar previsão do tempo:', error);
         }
       }
 
-      await saveCache(cacheKeys.home, { ownerSummary: ownerData, tenantSummary: tenantData, weather: forecastData });
+      void saveCache(cacheKeys.home, {
+        ownerSummary: ownerData,
+        tenantSummary: tenantData,
+        weather: forecastData,
+        weatherFetchedAt,
+      }).catch(() => undefined);
     } catch {
       const cached = await getCache<{
         ownerSummary?: typeof ownerSummary;
         tenantSummary?: typeof tenantSummary;
         weather?: WeatherDay[];
+        weatherFetchedAt?: string | null;
       }>(cacheKeys.home);
 
       if (cached) {
         setOwnerSummary(cached.ownerSummary ?? null);
         setTenantSummary(cached.tenantSummary ?? null);
         setWeather(cached.weather ?? []);
+        setWeatherUpdatedAt(cached.weatherFetchedAt ?? null);
       }
     } finally {
       setRefreshing(false);
@@ -145,6 +259,79 @@ export const HomeScreen = () => {
   const handleRefresh = useCallback(() => {
     void loadData();
   }, [loadData]);
+
+  const openOwnerPrivateChat = useCallback(async () => {
+    if (!profile || isOwner) {
+      return;
+    }
+
+    let targetChatId = ownerPrivateChatId;
+
+    if (!targetChatId) {
+      try {
+        const owner = await getOwnerUser();
+        if (owner) {
+          targetChatId = buildPrivateChatId(profile.id, owner.id);
+          setOwnerPrivateChatId(targetChatId);
+        }
+      } catch (error) {
+        console.warn('[HomeScreen] Falha ao abrir chat privado com proprietário:', error);
+      }
+    }
+
+    if (!targetChatId) {
+      Alert.alert('Chat indisponível', 'Não foi possível localizar o chat do proprietário agora. Tente novamente.');
+      return;
+    }
+
+    navigation.navigate('ChatRoom', {
+      chatId: targetChatId,
+      title: 'Proprietário',
+      isPrivate: true,
+    });
+  }, [isOwner, navigation, ownerPrivateChatId, profile]);
+
+  const requestRemoteBatterySupport = useCallback(async () => {
+    if (!profile || isOwner || sendingRemoteBatteryRequest) {
+      return;
+    }
+
+    try {
+      setSendingRemoteBatteryRequest(true);
+      const owner = await getOwnerUser();
+
+      if (!owner?.id) {
+        Alert.alert('Proprietário indisponível', 'Não foi possível localizar o proprietário agora. Tente novamente.');
+        return;
+      }
+
+      const chatId = buildPrivateChatId(profile.id, owner.id);
+      setOwnerPrivateChatId(chatId);
+
+      const houseLabel = profile.casaId ? `Casa ${profile.casaId}` : 'casa do inquilino';
+      const message = [
+        'Solicitação de troca de pilha do controle do portão.',
+        `Origem: ${houseLabel}.`,
+        'A bateria do controle acabou. Pode providenciar a venda/troca da pilha, por favor?',
+      ].join('\n');
+
+      await sendChatMessage({
+        chatId,
+        isPrivate: true,
+        text: message,
+        senderId: profile.id,
+        senderName: profile.nome,
+        senderPhotoURL: profile.photoURL ?? undefined,
+        notifyUserIdsOverride: [owner.id],
+      });
+
+      Alert.alert('Solicitação enviada', 'O proprietário recebeu sua solicitação de pilha do controle.');
+    } catch {
+      Alert.alert('Erro', 'Não foi possível enviar a solicitação agora. Tente novamente.');
+    } finally {
+      setSendingRemoteBatteryRequest(false);
+    }
+  }, [isOwner, profile, sendingRemoteBatteryRequest]);
 
   const paymentBadge = useMemo(() => {
     const status = tenantSummary?.payment?.status;
@@ -163,6 +350,67 @@ export const HomeScreen = () => {
 
     return <StatusBadge text="Pendente" tone="warning" />;
   }, [tenantSummary?.payment?.status]);
+
+  const weatherUpdatedLabel = useMemo(() => {
+    if (!weatherUpdatedAt) {
+      return 'Puxe para baixo ou toque em atualizar para carregar a previsão.';
+    }
+
+    const date = new Date(weatherUpdatedAt);
+    if (Number.isNaN(date.getTime())) {
+      return 'Previsão atualizada recentemente.';
+    }
+
+    const dateKey = toLocalDateKey(date);
+    const todayKey = toLocalDateKey(new Date());
+    const dayLabel = dateKey === todayKey ? 'Hoje' : formatDateOnlyBR(dateKey);
+    const timeLabel = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+    return `Atualizado: ${dayLabel} às ${timeLabel}`;
+  }, [weatherUpdatedAt]);
+
+  const isTenantRentOverdue = useMemo(() => {
+    if (isOwner) {
+      return false;
+    }
+
+    const status = tenantSummary?.payment?.status;
+    if (status === 'vencido') {
+      return true;
+    }
+
+    if (status === 'pago' || status === 'aguardando_confirmacao') {
+      return false;
+    }
+
+    const dueDateRaw = tenantSummary?.dueDate;
+    if (!dueDateRaw) {
+      return false;
+    }
+
+    const dueDate = new Date(dueDateRaw);
+    if (Number.isNaN(dueDate.getTime())) {
+      return false;
+    }
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const dueStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+    return dueStart.getTime() < todayStart.getTime();
+  }, [isOwner, tenantSummary?.dueDate, tenantSummary?.payment?.status]);
+
+  const shouldShowTenantDueDate = useMemo(() => {
+    if (isOwner) {
+      return false;
+    }
+
+    const status = tenantSummary?.payment?.status;
+    if (status === 'pendente' || status === 'vencido') {
+      return true;
+    }
+
+    return isTenantRentOverdue;
+  }, [isOwner, isTenantRentOverdue, tenantSummary?.payment?.status]);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -198,72 +446,74 @@ export const HomeScreen = () => {
 
       {isOwner ? (
         <AppCard>
-          <Text style={styles.cardTitle}>Resumo de aluguéis do mês</Text>
+          <View style={styles.inlineSpace}>
+            <Text style={styles.cardTitle}>Resumo de aluguéis do mês</Text>
+            <MaterialIcons name="paid" size={25} color={palette.greenDark} />
+          </View>
           <Text style={styles.bigValue}>{ownerSummary ? `${ownerSummary.paidCount}/${ownerSummary.totalHouses}` : '--'} pagos</Text>
           <Text style={styles.cardSubtitle}>
-            Total recebido: {ownerSummary ? formatCurrencyBRL(ownerSummary.totalReceived) : '--'}
+            Total recebido:{' '}
+            <Text style={styles.cardSubtitleStrong}>
+              {ownerSummary ? formatCurrencyBRL(ownerSummary.totalReceived) : '--'}
+            </Text>
           </Text>
-          <StatusBadge text={`${ownerSummary?.openTickets ?? 0} chamados abertos`} tone="warning" />
+          {Number(ownerSummary?.openTickets ?? 0) > 0 ? (
+            <StatusBadge text={`${ownerSummary?.openTickets ?? 0} chamados abertos`} tone="warning" />
+          ) : null}
         </AppCard>
       ) : (
-        <AppCard>
-          <Text style={styles.cardTitle}>Meu aluguel</Text>
-          {paymentBadge}
+        <AppCard style={isTenantRentOverdue ? styles.overdueRentCard : undefined}>
+          <View style={styles.inlineSpace}>
+            <Text style={styles.cardTitle}>Meu aluguel</Text>
+            <MaterialIcons name="paid" size={25} color={palette.greenDark} />
+          </View>
+          {isTenantRentOverdue ? (
+            <StatusBadge
+              text="Atrasado"
+              tone="danger"
+              containerStyle={styles.overdueBadge}
+              textStyle={styles.overdueBadgeText}
+            />
+          ) : paymentBadge}
           <Text style={styles.cardSubtitle}>
-            Valor mensal: {formatCurrencyBRL(tenantSummary?.payment?.valor ?? 0)}
+            Valor mensal:{' '}
+            <Text style={styles.cardSubtitleStrong}>
+              {formatCurrencyBRL(tenantSummary?.payment?.valor ?? 0)}
+            </Text>
           </Text>
-          <Text style={styles.cardSubtitle}>
-            Próximo vencimento: {tenantSummary?.dueDate ? countdownDays(tenantSummary.dueDate) : 'Sem data'}
-          </Text>
+          {shouldShowTenantDueDate ? (
+            <Text style={styles.cardSubtitle}>
+              {formatTenantDueLabel(tenantSummary?.dueDate)}
+            </Text>
+          ) : null}
         </AppCard>
       )}
 
       <AppCard>
         <View style={styles.inlineSpace}>
           <Text style={styles.cardTitle}>Ações rápidas</Text>
-          <MaterialIcons name="bolt" size={18} color={palette.greenDark} />
+          <MaterialIcons name="bolt" size={25} color={palette.greenDark} />
         </View>
         <View style={styles.quickActionsGrid}>
-          <QuickAction title="Abrir portão" icon="door-front" onPress={() => navigation.navigate('Gate')} />
+          {isOwner ? <QuickAction title="Abrir portão" icon="door-front" onPress={() => navigation.navigate('Gate')} /> : null}
           <QuickAction title="Novo chamado" icon="build" onPress={() => navigation.navigate('TicketForm')} />
-          <QuickAction title="Avisos" icon="campaign" onPress={() => navigation.navigate('Notices')} />
+          {!isOwner ? <QuickAction title="Avisos" icon="campaign" onPress={() => navigation.navigate('Notices')} /> : null}
+          {!isOwner ? (
+            <QuickAction title="Pilha do controle" icon="settings-remote" onPress={() => void requestRemoteBatterySupport()} />
+          ) : null}
           <QuickAction
             title={isOwner ? 'Publicar aviso' : 'Falar com proprietário'}
             icon="chat"
-            onPress={() =>
-              isOwner
-                ? navigation.navigate('Notices')
-                : navigation.navigate('ChatRoom', {
-                    chatId: 'owner_private',
-                    title: 'Proprietário',
-                    isPrivate: true,
-                  })
-            }
+            onPress={() => {
+              if (isOwner) {
+                navigation.navigate('Notices');
+                return;
+              }
+
+              void openOwnerPrivateChat();
+            }}
           />
         </View>
-      </AppCard>
-
-      <AppCard>
-        <Text style={styles.cardTitle}>Previsão do tempo (3 dias)</Text>
-        {weather.length ? (
-          weather.map((day) => {
-            const iconName = getWeatherIconName(day);
-            return (
-              <View key={day.date} style={styles.weatherItem}>
-                <View style={styles.weatherMain}>
-                  <MaterialIcons name={iconName} size={22} color={getWeatherIconColor(iconName)} />
-                  <View style={styles.weatherInfo}>
-                    <Text style={styles.weatherDate}>{formatDateBR(day.date)}</Text>
-                    <Text style={styles.weatherText}>{day.description}</Text>
-                  </View>
-                </View>
-                <Text style={styles.weatherTemp}>{Math.round(day.tempMin)}° / {Math.round(day.tempMax)}°</Text>
-              </View>
-            );
-          })
-        ) : (
-          <Text style={styles.cardSubtitle}>Sem previsão disponível agora. Puxe para baixo para atualizar.</Text>
-        )}
       </AppCard>
 
       <AppCard>
@@ -281,31 +531,102 @@ export const HomeScreen = () => {
           <Text style={styles.cardSubtitle}>Nenhum aviso publicado recentemente.</Text>
         )}
       </AppCard>
+
+      <AppCard>
+        <View style={styles.weatherHeader}>
+          <View style={styles.weatherHeaderLeft}>
+            <View style={styles.weatherHeaderIcon}>
+              <MaterialIcons name="wb-sunny" size={20} color={palette.greenDark} />
+            </View>
+            <View style={styles.weatherHeaderTextWrap}>
+              <Text style={styles.cardTitle}>Previsão do tempo</Text>
+              <Text style={styles.weatherHeaderSubtitle}>Próximos 3 dias</Text>
+            </View>
+          </View>
+        </View>
+        <Text style={styles.weatherUpdatedText}>{weatherUpdatedLabel}</Text>
+
+        {weather.length ? (
+          <View style={styles.weatherList}>
+            {weather.map((day, index) => {
+              const iconName = getWeatherIconName(day);
+              const isLast = index === weather.length - 1;
+
+              return (
+                <View key={day.date} style={[styles.weatherRow, isLast && styles.weatherRowLast]}>
+                  <View style={styles.weatherDayColumn}>
+                    <Text style={styles.weatherDayLabel}>{getWeatherDayLabel(day.date)}</Text>
+                    <Text numberOfLines={1} style={styles.weatherDescription}>
+                      {normalizeWeatherDescription(day.description)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.weatherIconChip}>
+                    <MaterialIcons name={iconName} size={22} color={getWeatherIconColor(iconName)} />
+                  </View>
+
+                  <View style={styles.weatherTempColumn}>
+                    <Text style={styles.weatherTempMax}>{Math.round(day.tempMax)}°</Text>
+                    <Text style={styles.weatherTempMin}>{Math.round(day.tempMin)}°</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ) : refreshing ? (
+          <View style={styles.weatherEmptyState}>
+            <ActivityIndicator size="small" color={palette.greenDark} />
+            <Text style={styles.weatherEmptyText}>Atualizando previsão...</Text>
+          </View>
+        ) : (
+          <View style={styles.weatherEmptyState}>
+            <MaterialIcons name="cloud" size={20} color={palette.gray500} />
+            <Text style={styles.weatherEmptyText}>Sem previsão disponível no momento.</Text>
+            <Text style={styles.weatherEmptyHint}>Toque em atualizar ou puxe a tela para baixo.</Text>
+          </View>
+        )}
+      </AppCard>
     </ScreenContainer>
   );
 };
 
 const QuickAction = ({ title, icon, onPress }: { title: string; icon: keyof typeof MaterialIcons.glyphMap; onPress: () => void }) => (
   <Pressable style={({ pressed }) => [styles.quickAction, pressed && styles.quickActionPressed]} onPress={onPress}>
-    <MaterialIcons name={icon} size={20} color={palette.greenDark} />
+    <View style={styles.quickActionIconWrap}>
+      <MaterialIcons name={icon} size={18} color={palette.greenDark} />
+    </View>
     <Text style={styles.quickActionText}>{title}</Text>
   </Pressable>
 );
 
 const styles = StyleSheet.create({
   cardTitle: {
-    fontSize: 16,
+    fontSize: 17,
     color: palette.gray900,
-    fontWeight: '800',
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   bigValue: {
-    fontSize: 32,
+    fontSize: 40,
     color: palette.greenDark,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   cardSubtitle: {
-    fontSize: 14,
+    fontSize: 16,
     color: palette.gray700,
+  },
+  cardSubtitleStrong: {
+    fontWeight: '800',
+  },
+  overdueRentCard: {
+    backgroundColor: '#FDECEA',
+    borderColor: '#F5C2C0',
+  },
+  overdueBadge: {
+    backgroundColor: '#E05555',
+  },
+  overdueBadgeText: {
+    color: palette.white,
   },
   inlineSpace: {
     flexDirection: 'row',
@@ -316,60 +637,145 @@ const styles = StyleSheet.create({
   quickActionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   quickAction: {
     width: '48%',
     backgroundColor: palette.gray100,
-    borderRadius: radii.md,
-    paddingVertical: spacing.md,
+    borderRadius: radii.xl,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.sm,
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    flexDirection: 'row',
+    minHeight: 54,
     gap: spacing.xs,
+  },
+  quickActionIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.white,
   },
   quickActionPressed: {
     opacity: 0.7,
   },
   quickActionText: {
     color: palette.gray900,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '700',
-    textAlign: 'center',
+    textAlign: 'left',
+    flex: 1,
   },
-  weatherItem: {
+  weatherHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  weatherHeaderLeft: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingVertical: spacing.sm,
+    flex: 1,
+  },
+  weatherHeaderIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.gray100,
+  },
+  weatherHeaderTextWrap: {
+    flex: 1,
+    gap: 1,
+  },
+  weatherHeaderSubtitle: {
+    color: palette.gray700,
+    fontSize: 14,
+  },
+  weatherUpdatedText: {
+    color: palette.gray500,
+    fontSize: 13,
+    marginBottom: spacing.sm,
+  },
+  weatherList: {
+    borderTopWidth: 1,
+    borderTopColor: palette.gray100,
+  },
+  weatherRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: palette.gray100,
   },
-  weatherMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    gap: spacing.sm,
+  weatherRowLast: {
+    borderBottomWidth: 0,
+    paddingBottom: spacing.xs,
   },
-  weatherInfo: {
+  weatherDayColumn: {
     flex: 1,
     gap: 2,
   },
-  weatherDate: {
+  weatherDayLabel: {
     color: palette.gray900,
     fontWeight: '700',
+    fontSize: 16,
   },
-  weatherText: {
+  weatherDescription: {
     flex: 1,
     color: palette.gray700,
+    fontSize: 15,
   },
-  weatherTemp: {
+  weatherIconChip: {
+    width: 42,
+    height: 42,
+    borderRadius: radii.pill,
+    backgroundColor: palette.gray100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weatherTempColumn: {
+    alignItems: 'flex-end',
+    minWidth: 56,
+  },
+  weatherTempMax: {
     color: palette.gray900,
+    fontWeight: '800',
+    fontSize: 19,
+    lineHeight: 22,
+  },
+  weatherTempMin: {
+    color: palette.gray500,
     fontWeight: '700',
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  weatherEmptyState: {
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  weatherEmptyText: {
+    color: palette.gray700,
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  weatherEmptyHint: {
+    color: palette.gray500,
+    fontSize: 13,
+    textAlign: 'center',
   },
   headerAvatar: {
-    width: 48,
-    height: 48,
+    width: 50,
+    height: 50,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: palette.gray300,
@@ -384,7 +790,7 @@ const styles = StyleSheet.create({
   },
   noticeLine: {
     color: palette.gray700,
-    fontSize: 14,
+    fontSize: 16,
   },
   link: {
     color: palette.greenDark,

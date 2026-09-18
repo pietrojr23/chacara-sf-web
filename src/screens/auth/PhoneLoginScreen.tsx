@@ -18,6 +18,6 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     color: palette.gray700,
-    fontSize: 14,
+    fontSize: 15,
   },
 });

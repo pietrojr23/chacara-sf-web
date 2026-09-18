@@ -173,6 +173,7 @@ const topLevelCollectionMap: Record<string, string> = {
   visitantes: 'visitantes',
   acessos: 'acessos',
   configuracoes: 'configuracoes',
+  chatThreads: 'chat_threads',
   contatosEmergencia: 'contatos_emergencia',
 };
 

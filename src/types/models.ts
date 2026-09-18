@@ -29,14 +29,18 @@ export interface House {
   numero: string;
   aluguelMensal: number;
   diaVencimento: number;
-  inquilinoNome?: string;
-  inquilinoCpf?: string;
   dataInicioContrato?: string;
   fotoFachadaUrl?: string;
   moradores?: Array<{
     nome: string;
     fotoUrl?: string;
     contato?: string;
+    cpf?: string;
+    telefone?: string;
+    email?: string;
+    parentesco?: string;
+    dataNascimento?: string;
+    observacoes?: string;
   }>;
   veiculos?: string[];
   pets?: Array<{
@@ -51,9 +55,12 @@ export interface RentalPayment {
   competencia: string;
   valor: number;
   status: RentalStatus;
+  tipo?: 'aluguel' | 'luz';
   dataPagamento?: string;
   formaPagamento?: 'Pix' | 'Dinheiro' | 'Transferencia';
   reciboUrl?: string;
+  boletoPdfUrl?: string;
+  comprovantePagamentoUrl?: string;
   marcadoComoPagoPeloInquilino?: boolean;
 }
 
@@ -99,11 +106,43 @@ export interface ChatMessage {
   chatId: string;
   texto?: string;
   imagemUrl?: string;
+  audioUrl?: string;
+  audioDurationMs?: number;
+  replyTo?: {
+    messageId: string;
+    senderId: string;
+    senderName: string;
+    text?: string;
+    imageUrl?: string;
+    audioUrl?: string;
+  } | null;
   enviadoPor: string;
   enviadoPorNome: string;
   enviadoPorFotoURL?: string;
   enviadoEm: string;
   lidoPor?: string[];
+}
+
+export type PrivateChatThreadStatus = 'aberto' | 'concluido';
+
+export interface PrivateChatThread {
+  id: string;
+  baseChatId: string;
+  ownerId: string;
+  tenantId: string;
+  participantIds: string[];
+  title: string;
+  status: PrivateChatThreadStatus;
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  closedById?: string;
+  closedByName?: string;
+  autoTitleGenerated?: boolean;
+  autoTitleUpdatedAt?: string;
+  autoTitleMessageCount?: number;
 }
 
 export interface Visitor {
@@ -138,10 +177,44 @@ export interface CameraConfig {
   nome: string;
   rtspUrl: string;
   playbackUrl?: string;
+  playbackUrlExternal?: string;
   casasPermitidas: string[];
   ativo: boolean;
   criadoEm?: string;
   atualizadoEm?: string;
+}
+
+export interface GateHouseAccessRule {
+  houseId: string;
+  enabled?: boolean;
+  windowStart?: string;
+  windowEnd?: string;
+  cooldownSeconds?: number;
+  maxOpensPerDay?: number;
+  requireProximity?: boolean;
+  maxDistanceMeters?: number;
+  requireBiometric?: boolean;
+  accessPin?: string;
+}
+
+export interface GateTenantAccessConfig {
+  enabled: boolean;
+  defaultWindowStart: string;
+  defaultWindowEnd: string;
+  defaultCooldownSeconds: number;
+  defaultMaxOpensPerDay: number;
+  defaultRequireProximity: boolean;
+  defaultMaxDistanceMeters: number;
+  defaultRequireBiometric: boolean;
+  houseRules?: GateHouseAccessRule[];
+}
+
+export interface HeadlightConfig {
+  id: string;
+  nome: string;
+  descricao?: string;
+  casasPermitidas?: string[];
+  ativo?: boolean;
 }
 
 export interface AppConfig {
@@ -151,6 +224,8 @@ export interface AppConfig {
   chavePix: string;
   gateWebhookUrl?: string;
   gateCloseWebhookUrl?: string;
+  tenantGateAccess?: GateTenantAccessConfig;
+  headlights?: HeadlightConfig[];
   tarifaEnergia: number;
   latitude?: number;
   longitude?: number;

@@ -20,14 +20,31 @@ interface ChargePayload {
   ownerName: string;
 }
 
+interface ContractPayload {
+  title?: string;
+  contractText: string;
+}
+
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
 export const generateReceiptPdf = async ({ tenantName, houseName, payment, ownerName }: ReceiptPayload) => {
+  const isLightBill = payment.tipo === 'luz';
+  const receiptTitle = isLightBill ? 'Recibo de Conta de Luz' : 'Recibo de Aluguel';
+  const competenceLabel = isLightBill ? 'Competência da conta de luz' : 'Competência';
+
   const html = `
     <html>
       <body style="font-family: Arial; padding: 24px; color: #1B1D1B;">
-        <h1 style="color: #2D5A27;">Recibo de Aluguel</h1>
+        <h1 style="color: #2D5A27;">${receiptTitle}</h1>
         <p><strong>Inquilino:</strong> ${tenantName}</p>
         <p><strong>Casa:</strong> ${houseName}</p>
-        <p><strong>Competencia:</strong> ${payment.competencia}</p>
+        <p><strong>${competenceLabel}:</strong> ${payment.competencia}</p>
         <p><strong>Valor:</strong> ${formatCurrencyBRL(payment.valor)}</p>
         <p><strong>Data do pagamento:</strong> ${formatDateBR(payment.dataPagamento)}</p>
         <p><strong>Forma de pagamento:</strong> ${payment.formaPagamento ?? 'Nao informada'}</p>
@@ -66,6 +83,25 @@ export const generateChargePdf = async ({
         <p style="margin-top: 32px;">Emitido por:</p>
         <p style="font-weight: bold;">${ownerName}</p>
         <p style="font-size: 12px; color: #666;">Data de emissao: ${formatDateBR(new Date().toISOString())}</p>
+      </body>
+    </html>
+  `;
+
+  const { uri } = await Print.printToFileAsync({ html });
+  return uri;
+};
+
+export const generateContractPdf = async ({ title = 'Contrato de Aluguel', contractText }: ContractPayload) => {
+  const sanitizedTitle = escapeHtml(title);
+  const sanitizedText = escapeHtml(contractText).replaceAll('\n', '<br />');
+
+  const html = `
+    <html>
+      <body style="font-family: Arial; padding: 24px; color: #1B1D1B;">
+        <h1 style="color: #2D5A27;">${sanitizedTitle}</h1>
+        <div style="font-size: 13px; line-height: 1.5;">${sanitizedText}</div>
+        <hr style="margin-top: 24px;" />
+        <p style="font-size: 12px; color: #666;">Gerado em ${formatDateBR(new Date().toISOString())}</p>
       </body>
     </html>
   `;

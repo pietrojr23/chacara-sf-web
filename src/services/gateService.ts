@@ -17,9 +17,15 @@ export const updateGateStatus = async (
   userId: string,
   userName: string,
   source: 'manual' | 'visitor' = 'manual',
+  context?: {
+    houseId?: string;
+    latitude?: number;
+    longitude?: number;
+    distanceMeters?: number;
+  },
 ) => {
   const config = await getGateConfig();
-  const url = status === 'aberto' ? config?.gateWebhookUrl : config?.gateCloseWebhookUrl;
+  const url = String(config?.gateWebhookUrl ?? config?.gateCloseWebhookUrl ?? '').trim();
 
   if (url) {
     await axios.post(
@@ -49,6 +55,10 @@ export const updateGateStatus = async (
     userId,
     userName,
     source,
+    houseId: context?.houseId ?? null,
+    latitude: typeof context?.latitude === 'number' ? context.latitude : null,
+    longitude: typeof context?.longitude === 'number' ? context.longitude : null,
+    distanceMeters: typeof context?.distanceMeters === 'number' ? context.distanceMeters : null,
     createdAt: serverTimestamp(),
   });
 };

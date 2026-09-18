@@ -2,9 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  Pressable,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native';
@@ -13,7 +11,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { AppButton } from '../../components/AppButton';
 import { AppCard } from '../../components/AppCard';
+import { AppCheckbox } from '../../components/AppCheckbox';
 import { AppInput } from '../../components/AppInput';
+import { AppSelect } from '../../components/AppSelect';
 import { EmptyState } from '../../components/EmptyState';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { SectionHeader } from '../../components/SectionHeader';
@@ -24,7 +24,32 @@ import { useDataSync } from '../../contexts/DataSyncContext';
 import { createTenantByOwner, resetTenantPasswordByOwner, setTenantStatusByOwner } from '../../services/authService';
 import { getAllHouses, getAllUsers, updateUserProfile } from '../../services/firestoreService';
 import { uploadImageAsync } from '../../services/storageService';
-import { AppUser, House } from '../../types/models';
+import { AppUser, GateHouseAccessRule, House } from '../../types/models';
+
+type EditableGateHouseRule = {
+  houseId: string;
+  houseName: string;
+  enabled: boolean;
+  windowStart: string;
+  windowEnd: string;
+  cooldownSeconds: string;
+  maxOpensPerDay: string;
+  requireProximity: boolean;
+  maxDistanceMeters: string;
+  requireBiometric: boolean;
+  accessPin: string;
+};
+
+const normalizeHm = (raw: unknown, fallback: string) => {
+  const text = String(raw ?? '').trim();
+  return /^([01]?\d|2[0-3]):([0-5]\d)$/.test(text) ? text : fallback;
+};
+
+const toIntString = (value: unknown, fallback: number, min = 0) => {
+  const parsed = Number(value);
+  const safe = Number.isFinite(parsed) ? Math.max(min, Math.trunc(parsed)) : fallback;
+  return String(safe);
+};
 
 export const SettingsScreen = () => {
   const { profile, signOut, refreshProfile } = useAuth();
@@ -47,13 +72,34 @@ export const SettingsScreen = () => {
   const [coverPhoto, setCoverPhoto] = useState(config.fotoCapaUrl ?? '');
   const [pixKey, setPixKey] = useState(config.chavePix);
   const [gateWebhook, setGateWebhook] = useState(config.gateWebhookUrl ?? '');
-  const [gateCloseWebhook, setGateCloseWebhook] = useState(config.gateCloseWebhookUrl ?? '');
   const [tarifaEnergia, setTarifaEnergia] = useState(String(config.tarifaEnergia ?? 0));
   const [latitude, setLatitude] = useState(String(config.latitude ?? -23.55052));
   const [longitude, setLongitude] = useState(String(config.longitude ?? -46.633308));
-  const [temaEscuroAtivo, setTemaEscuroAtivo] = useState(config.temaEscuroAtivo);
 
   const [notifications, setNotifications] = useState(config.notificacoes);
+  const [tenantGateAccessEnabled, setTenantGateAccessEnabled] = useState(config.tenantGateAccess?.enabled ?? true);
+  const [tenantGateWindowStart, setTenantGateWindowStart] = useState(
+    normalizeHm(config.tenantGateAccess?.defaultWindowStart, '06:00'),
+  );
+  const [tenantGateWindowEnd, setTenantGateWindowEnd] = useState(
+    normalizeHm(config.tenantGateAccess?.defaultWindowEnd, '23:00'),
+  );
+  const [tenantGateCooldownSeconds, setTenantGateCooldownSeconds] = useState(
+    toIntString(config.tenantGateAccess?.defaultCooldownSeconds, 30, 0),
+  );
+  const [tenantGateMaxOpensPerDay, setTenantGateMaxOpensPerDay] = useState(
+    toIntString(config.tenantGateAccess?.defaultMaxOpensPerDay, 10, 1),
+  );
+  const [tenantGateRequireProximity, setTenantGateRequireProximity] = useState(
+    config.tenantGateAccess?.defaultRequireProximity ?? true,
+  );
+  const [tenantGateMaxDistanceMeters, setTenantGateMaxDistanceMeters] = useState(
+    toIntString(config.tenantGateAccess?.defaultMaxDistanceMeters, 200, 20),
+  );
+  const [tenantGateRequireBiometric, setTenantGateRequireBiometric] = useState(
+    config.tenantGateAccess?.defaultRequireBiometric ?? true,
+  );
+  const [houseGateRules, setHouseGateRules] = useState<EditableGateHouseRule[]>([]);
 
   const [houses, setHouses] = useState<House[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -185,23 +231,79 @@ export const SettingsScreen = () => {
   }, [isOwner, loadOwnerData]);
 
   useEffect(() => {
+    const tenantGate = config.tenantGateAccess;
     setPropertyName(config.propriedadeNome);
     setCoverPhoto(config.fotoCapaUrl ?? '');
     setPixKey(config.chavePix);
-    setGateWebhook(config.gateWebhookUrl ?? '');
-    setGateCloseWebhook(config.gateCloseWebhookUrl ?? '');
+    setGateWebhook(config.gateWebhookUrl ?? config.gateCloseWebhookUrl ?? '');
     setTarifaEnergia(String(config.tarifaEnergia ?? 0));
     setLatitude(String(config.latitude ?? -23.55052));
     setLongitude(String(config.longitude ?? -46.633308));
     setNotifications(config.notificacoes);
-    setTemaEscuroAtivo(config.temaEscuroAtivo);
+    setTenantGateAccessEnabled(tenantGate?.enabled ?? true);
+    setTenantGateWindowStart(normalizeHm(tenantGate?.defaultWindowStart, '06:00'));
+    setTenantGateWindowEnd(normalizeHm(tenantGate?.defaultWindowEnd, '23:00'));
+    setTenantGateCooldownSeconds(toIntString(tenantGate?.defaultCooldownSeconds, 30, 0));
+    setTenantGateMaxOpensPerDay(toIntString(tenantGate?.defaultMaxOpensPerDay, 10, 1));
+    setTenantGateRequireProximity(tenantGate?.defaultRequireProximity ?? true);
+    setTenantGateMaxDistanceMeters(toIntString(tenantGate?.defaultMaxDistanceMeters, 200, 20));
+    setTenantGateRequireBiometric(tenantGate?.defaultRequireBiometric ?? true);
   }, [config]);
+
+  useEffect(() => {
+    if (!houses.length) {
+      setHouseGateRules([]);
+      return;
+    }
+
+    const tenantGate = config.tenantGateAccess;
+    const defaultStart = normalizeHm(tenantGate?.defaultWindowStart, '06:00');
+    const defaultEnd = normalizeHm(tenantGate?.defaultWindowEnd, '23:00');
+    const defaultCooldown = toIntString(tenantGate?.defaultCooldownSeconds, 30, 0);
+    const defaultDailyLimit = toIntString(tenantGate?.defaultMaxOpensPerDay, 10, 1);
+    const defaultRequireProximity = tenantGate?.defaultRequireProximity ?? true;
+    const defaultMaxDistance = toIntString(tenantGate?.defaultMaxDistanceMeters, 200, 20);
+    const defaultRequireBiometric = tenantGate?.defaultRequireBiometric ?? true;
+
+    const ruleMap = new Map<string, GateHouseAccessRule>();
+    (tenantGate?.houseRules ?? []).forEach((rule) => {
+      const houseId = String(rule.houseId ?? '').trim();
+      if (houseId) {
+        ruleMap.set(houseId, rule);
+      }
+    });
+
+    setHouseGateRules(
+      houses.map((house) => {
+        const houseRule = ruleMap.get(house.id);
+        return {
+          houseId: house.id,
+          houseName: house.nome || house.id,
+          enabled: houseRule?.enabled ?? tenantGate?.enabled ?? true,
+          windowStart: normalizeHm(houseRule?.windowStart, defaultStart),
+          windowEnd: normalizeHm(houseRule?.windowEnd, defaultEnd),
+          cooldownSeconds: toIntString(houseRule?.cooldownSeconds, Number(defaultCooldown), 0),
+          maxOpensPerDay: toIntString(houseRule?.maxOpensPerDay, Number(defaultDailyLimit), 1),
+          requireProximity: houseRule?.requireProximity ?? defaultRequireProximity,
+          maxDistanceMeters: toIntString(houseRule?.maxDistanceMeters, Number(defaultMaxDistance), 20),
+          requireBiometric: houseRule?.requireBiometric ?? defaultRequireBiometric,
+          accessPin: String(houseRule?.accessPin ?? ''),
+        };
+      }),
+    );
+  }, [config.tenantGateAccess, houses]);
 
   useEffect(() => {
     setAccountPhoto(profile?.photoURL ?? '');
   }, [profile?.photoURL]);
 
   const tenantUsers = useMemo(() => users.filter((user) => !user.isOwner), [users]);
+
+  const updateHouseGateRule = useCallback((houseId: string, patch: Partial<EditableGateHouseRule>) => {
+    setHouseGateRules((current) =>
+      current.map((item) => (item.houseId === houseId ? { ...item, ...patch } : item)),
+    );
+  }, []);
 
   const pickImageFromLibrary = useCallback(async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -288,6 +390,11 @@ export const SettingsScreen = () => {
   };
 
   const handleSaveConfig = async () => {
+    if (!isOwner) {
+      Alert.alert('Sem permissão', 'Somente o proprietário pode alterar configurações globais.');
+      return;
+    }
+
     try {
       setActionLoading('saveConfig');
 
@@ -296,17 +403,44 @@ export const SettingsScreen = () => {
         coverUrl = await withTimeout(uploadImageAsync(coverPhoto, `configuracoes/capa-${Date.now()}.jpg`));
       }
 
+      const parsedDefaultCooldown = Math.max(0, Math.trunc(Number(tenantGateCooldownSeconds) || 0));
+      const parsedDefaultDailyLimit = Math.max(1, Math.trunc(Number(tenantGateMaxOpensPerDay) || 1));
+      const parsedDefaultDistance = Math.max(20, Math.trunc(Number(tenantGateMaxDistanceMeters) || 20));
+      const houseRulesPayload: GateHouseAccessRule[] = houseGateRules.map((rule) => ({
+        houseId: rule.houseId,
+        enabled: rule.enabled,
+        windowStart: normalizeHm(rule.windowStart, normalizeHm(tenantGateWindowStart, '06:00')),
+        windowEnd: normalizeHm(rule.windowEnd, normalizeHm(tenantGateWindowEnd, '23:00')),
+        cooldownSeconds: Math.max(0, Math.trunc(Number(rule.cooldownSeconds) || 0)),
+        maxOpensPerDay: Math.max(1, Math.trunc(Number(rule.maxOpensPerDay) || 1)),
+        requireProximity: rule.requireProximity,
+        maxDistanceMeters: Math.max(20, Math.trunc(Number(rule.maxDistanceMeters) || 20)),
+        requireBiometric: rule.requireBiometric,
+        accessPin: String(rule.accessPin ?? '').replace(/\D/g, '').slice(0, 8),
+      }));
+
       await withTimeout(
         saveConfig({
           propriedadeNome: propertyName.trim() || config.propriedadeNome,
           fotoCapaUrl: coverUrl,
           chavePix: pixKey.trim(),
           gateWebhookUrl: gateWebhook.trim(),
-          gateCloseWebhookUrl: gateCloseWebhook.trim(),
+          gateCloseWebhookUrl: gateWebhook.trim(),
           tarifaEnergia: Number(tarifaEnergia.replace(',', '.')) || 0,
           latitude: Number(latitude) || 0,
           longitude: Number(longitude) || 0,
-          temaEscuroAtivo,
+          tenantGateAccess: {
+            enabled: tenantGateAccessEnabled,
+            defaultWindowStart: normalizeHm(tenantGateWindowStart, '06:00'),
+            defaultWindowEnd: normalizeHm(tenantGateWindowEnd, '23:00'),
+            defaultCooldownSeconds: parsedDefaultCooldown,
+            defaultMaxOpensPerDay: parsedDefaultDailyLimit,
+            defaultRequireProximity: tenantGateRequireProximity,
+            defaultMaxDistanceMeters: parsedDefaultDistance,
+            defaultRequireBiometric: tenantGateRequireBiometric,
+            houseRules: houseRulesPayload,
+          },
+          temaEscuroAtivo: false,
           notificacoes: notifications,
         }),
       );
@@ -417,59 +551,172 @@ export const SettingsScreen = () => {
         />
       </AppCard>
 
-      <AppCard>
-        <Text style={styles.cardTitle}>Geral</Text>
-        <AppInput
-          label="Nome da propriedade"
-          value={propertyName}
-          onChangeText={setPropertyName}
-          editable={isOwner}
-        />
-        <AppInput
-          label="Chave Pix"
-          value={pixKey}
-          onChangeText={setPixKey}
-          placeholder="Pix para aluguel"
-          editable={isOwner}
-        />
-        <AppInput
-          label="Tarifa da energia (R$/kWh)"
-          value={tarifaEnergia}
-          onChangeText={setTarifaEnergia}
-          keyboardType="numeric"
-          editable={isOwner}
-        />
+      {isOwner ? (
+        <AppCard>
+          <Text style={styles.cardTitle}>Geral</Text>
+          <AppInput
+            label="Nome da propriedade"
+            value={propertyName}
+            onChangeText={setPropertyName}
+            editable={isOwner}
+          />
+          <AppInput
+            label="Chave Pix"
+            value={pixKey}
+            onChangeText={setPixKey}
+            placeholder="Pix para aluguel"
+            editable={isOwner}
+          />
+          <AppInput
+            label="Tarifa da energia (R$/kWh)"
+            value={tarifaEnergia}
+            onChangeText={setTarifaEnergia}
+            keyboardType="numeric"
+            editable={isOwner}
+          />
 
-        <Text style={styles.label}>Foto de capa da propriedade</Text>
-        <AppButton label="Selecionar foto" variant="ghost" onPress={pickCoverPhoto} disabled={!isOwner} />
-        {!isOwner ? <Text style={styles.readOnlyHint}>Somente leitura para inquilinos.</Text> : null}
-        {coverPhoto ? <Image source={{ uri: coverPhoto }} style={styles.coverPreview} /> : null}
-      </AppCard>
+          <Text style={styles.label}>Foto de capa da propriedade</Text>
+          <AppButton label="Selecionar foto" variant="ghost" onPress={pickCoverPhoto} />
+          {coverPhoto ? <Image source={{ uri: coverPhoto }} style={styles.coverPreview} /> : null}
+        </AppCard>
+      ) : null}
 
       {isOwner ? (
         <AppCard>
           <Text style={styles.cardTitle}>Webhooks e localização</Text>
           <AppInput
-            label="Webhook abrir portão"
+            label="Webhook do portão (pulso único)"
             value={gateWebhook}
             onChangeText={setGateWebhook}
-            placeholder="https://..."
+            placeholder="http://IP_DO_DISPOSITIVO/gate/open?k=..."
           />
-          <AppInput
-            label="Webhook fechar portão"
-            value={gateCloseWebhook}
-            onChangeText={setGateCloseWebhook}
-            placeholder="https://..."
-          />
+          <Text style={styles.readOnlyHint}>No modo botoeira (MS-111), abrir e fechar usam o mesmo webhook.</Text>
           <AppInput label="Latitude" value={latitude} onChangeText={setLatitude} keyboardType="numeric" />
           <AppInput label="Longitude" value={longitude} onChangeText={setLongitude} keyboardType="numeric" />
         </AppCard>
       ) : null}
 
-      <AppCard>
-        <Text style={styles.cardTitle}>Tema e notificações</Text>
+      {isOwner ? (
+        <AppCard>
+          <Text style={styles.cardTitle}>Acesso do portão (inquilinos)</Text>
 
-        <ToggleRow label="Tema escuro" value={temaEscuroAtivo} onChange={setTemaEscuroAtivo} />
+          <AppCheckbox
+            label="Permitir inquilino abrir portão"
+            checked={tenantGateAccessEnabled}
+            onChange={setTenantGateAccessEnabled}
+          />
+          <AppInput
+            label="Janela de horário (início HH:mm)"
+            value={tenantGateWindowStart}
+            onChangeText={setTenantGateWindowStart}
+            placeholder="06:00"
+          />
+          <AppInput
+            label="Janela de horário (fim HH:mm)"
+            value={tenantGateWindowEnd}
+            onChangeText={setTenantGateWindowEnd}
+            placeholder="23:00"
+          />
+          <AppInput
+            label="Cooldown padrão (segundos)"
+            value={tenantGateCooldownSeconds}
+            onChangeText={setTenantGateCooldownSeconds}
+            keyboardType="numeric"
+          />
+          <AppInput
+            label="Limite diário padrão (aberturas)"
+            value={tenantGateMaxOpensPerDay}
+            onChangeText={setTenantGateMaxOpensPerDay}
+            keyboardType="numeric"
+          />
+          <AppCheckbox
+            label="Exigir proximidade da chácara"
+            checked={tenantGateRequireProximity}
+            onChange={setTenantGateRequireProximity}
+          />
+          <AppInput
+            label="Raio máximo padrão (metros)"
+            value={tenantGateMaxDistanceMeters}
+            onChangeText={setTenantGateMaxDistanceMeters}
+            keyboardType="numeric"
+          />
+          <AppCheckbox
+            label="Exigir biometria (ou PIN da casa)"
+            checked={tenantGateRequireBiometric}
+            onChange={setTenantGateRequireBiometric}
+          />
+
+          {houseGateRules.length ? (
+            houseGateRules.map((rule) => (
+              <View key={rule.houseId} style={styles.userCard}>
+                <Text style={styles.userName}>{rule.houseName}</Text>
+                <AppCheckbox
+                  label="Permitir abertura nesta casa"
+                  checked={rule.enabled}
+                  onChange={(value) => updateHouseGateRule(rule.houseId, { enabled: value })}
+                />
+                <AppInput
+                  label="Horário início (HH:mm)"
+                  value={rule.windowStart}
+                  onChangeText={(value) => updateHouseGateRule(rule.houseId, { windowStart: value })}
+                  placeholder="06:00"
+                />
+                <AppInput
+                  label="Horário fim (HH:mm)"
+                  value={rule.windowEnd}
+                  onChangeText={(value) => updateHouseGateRule(rule.houseId, { windowEnd: value })}
+                  placeholder="23:00"
+                />
+                <AppInput
+                  label="Cooldown (segundos)"
+                  value={rule.cooldownSeconds}
+                  onChangeText={(value) => updateHouseGateRule(rule.houseId, { cooldownSeconds: value })}
+                  keyboardType="numeric"
+                />
+                <AppInput
+                  label="Limite diário"
+                  value={rule.maxOpensPerDay}
+                  onChangeText={(value) => updateHouseGateRule(rule.houseId, { maxOpensPerDay: value })}
+                  keyboardType="numeric"
+                />
+                <AppCheckbox
+                  label="Exigir proximidade nesta casa"
+                  checked={rule.requireProximity}
+                  onChange={(value) => updateHouseGateRule(rule.houseId, { requireProximity: value })}
+                />
+                <AppInput
+                  label="Raio máximo (metros)"
+                  value={rule.maxDistanceMeters}
+                  onChangeText={(value) => updateHouseGateRule(rule.houseId, { maxDistanceMeters: value })}
+                  keyboardType="numeric"
+                />
+                <AppCheckbox
+                  label="Exigir biometria nesta casa"
+                  checked={rule.requireBiometric}
+                  onChange={(value) => updateHouseGateRule(rule.houseId, { requireBiometric: value })}
+                />
+                <AppInput
+                  label="PIN da casa (opcional)"
+                  value={rule.accessPin}
+                  onChangeText={(value) =>
+                    updateHouseGateRule(rule.houseId, { accessPin: value.replace(/\D/g, '').slice(0, 8) })}
+                  keyboardType="numeric"
+                  secureTextEntry
+                  placeholder="Ex: 4321"
+                />
+              </View>
+            ))
+          ) : (
+            <EmptyState
+              title="Sem casas para configurar"
+              subtitle="Carregue as casas para aplicar regras de acesso por casa."
+            />
+          )}
+        </AppCard>
+      ) : null}
+
+      <AppCard>
+        <Text style={styles.cardTitle}>Notificações</Text>
 
         <ToggleRow
           label="Avisos"
@@ -513,19 +760,12 @@ export const SettingsScreen = () => {
 
           <Text style={styles.label}>Casa vinculada</Text>
           {houses.length ? (
-            <View style={styles.chips}>
-              {houses.map((house) => (
-                <Pressable
-                  key={house.id}
-                  style={[styles.chip, tenantHouseId === house.id && styles.chipActive]}
-                  onPress={() => setTenantHouseId(house.id)}
-                >
-                  <Text style={[styles.chipText, tenantHouseId === house.id && styles.chipTextActive]}>
-                    {house.nome || house.id}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            <AppSelect
+              label="Casa vinculada"
+              value={tenantHouseId || houses[0].id}
+              onChange={setTenantHouseId}
+              options={houses.map((house) => ({ label: house.nome || house.id, value: house.id }))}
+            />
           ) : (
             <>
               <EmptyState
@@ -593,7 +833,9 @@ export const SettingsScreen = () => {
       ) : null}
 
       <AppCard>
-        <AppButton label="Salvar configurações" onPress={handleSaveConfig} loading={actionLoading === 'saveConfig'} />
+        {isOwner ? (
+          <AppButton label="Salvar configurações" onPress={handleSaveConfig} loading={actionLoading === 'saveConfig'} />
+        ) : null}
         <AppButton label="Sair da conta" variant="ghost" onPress={signOut} />
       </AppCard>
     </ScreenContainer>
@@ -610,20 +852,20 @@ const ToggleRow = ({
   onChange: (value: boolean) => void;
 }) => (
   <View style={styles.toggleRow}>
-    <Text style={styles.toggleLabel}>{label}</Text>
-    <Switch value={value} onValueChange={onChange} trackColor={{ true: palette.greenLight }} thumbColor={palette.white} />
+    <AppCheckbox label={label} checked={value} onChange={onChange} />
   </View>
 );
 
 const styles = StyleSheet.create({
   cardTitle: {
     color: palette.gray900,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
+    textTransform: 'uppercase',
   },
   label: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '700',
   },
   coverPreview: {
@@ -633,45 +875,13 @@ const styles = StyleSheet.create({
   },
   readOnlyHint: {
     color: palette.gray500,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: palette.gray100,
-    paddingVertical: spacing.sm,
-  },
-  toggleLabel: {
-    color: palette.gray900,
     fontSize: 14,
     fontWeight: '600',
   },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  chip: {
-    borderWidth: 1,
-    borderColor: palette.gray300,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  chipActive: {
-    borderColor: palette.greenDark,
-    backgroundColor: palette.greenDark,
-  },
-  chipText: {
-    color: palette.gray900,
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  chipTextActive: {
-    color: palette.white,
+  toggleRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: palette.gray100,
+    paddingVertical: spacing.sm,
   },
   userCard: {
     borderWidth: 1,
@@ -735,7 +945,7 @@ const styles = StyleSheet.create({
   },
   userMeta: {
     color: palette.gray700,
-    fontSize: 13,
+    fontSize: 14,
   },
   userActions: {
     gap: spacing.sm,

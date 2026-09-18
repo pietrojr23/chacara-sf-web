@@ -1,9 +1,11 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleProp, StyleSheet, Text, TextStyle, View, ViewStyle } from 'react-native';
 import { palette, radii, spacing } from '../constants/theme';
 
 interface StatusBadgeProps {
   text: string;
   tone?: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+  containerStyle?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
 }
 
 const toneStyles = {
@@ -14,9 +16,9 @@ const toneStyles = {
   neutral: { background: palette.gray100, color: palette.gray700 },
 };
 
-export const StatusBadge = ({ text, tone = 'neutral' }: StatusBadgeProps) => (
-  <View style={[styles.container, { backgroundColor: toneStyles[tone].background }]}>
-    <Text style={[styles.text, { color: toneStyles[tone].color }]}>{text}</Text>
+export const StatusBadge = ({ text, tone = 'neutral', containerStyle, textStyle }: StatusBadgeProps) => (
+  <View style={[styles.container, { backgroundColor: toneStyles[tone].background }, containerStyle]}>
+    <Text style={[styles.text, { color: toneStyles[tone].color }, textStyle]}>{text}</Text>
   </View>
 );
 

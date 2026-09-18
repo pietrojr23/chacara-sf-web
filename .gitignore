@@ -8,6 +8,8 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+build-*.apk
+ios-build/
 
 # Native
 .kotlin/
@@ -30,9 +32,64 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# backups de sessão / restaurações (lixo dev, não faz parte do produto)
+.codex-*/
+.codex-restore-*/
+.codex-backup-*/
+.claude/
+.claude_history*
+.temp/
+*.codex-backup*
+
+# tarballs / empacotamentos locais
+*.tar.gz
+*.tgz
+*.sha256
+mini_pc_web_restore-20260415.tar.gz*
+chacara-lubuntu-kiosk-*.tar.gz*
+contrato_locacao_sem_fiador.pdf
+icon.png
+
+# Firebase / segredos de push (NUNCA commitar)
+google-services.json
+google-services*.json
+*.p12
+*.p8
+
+# scripts-probe de diagnóstico quebrados/temporários desta sessão
+scripts/*-probe*.mjs
+scripts/probe-*.mjs
+scripts/fix-api-schema.mjs
+scripts/diagnose-*.mjs
+scripts/check-rest-fix.mjs
+scripts/verify-e2e.mjs
+scripts/e2e-app-routes.mjs
+scripts/move-to-api-schema.mjs
+scripts/move-to-api-and-verify.mjs
+scripts/read-pgrst-config.mjs
+scripts/reload-schema.mjs
+scripts/reload-and-check.mjs
+scripts/check-rest-tables.mjs
+scripts/inspect-*.mjs
+scripts/list-public-tables.mjs
+scripts/db-schemas-check.mjs
+scripts/diagnose-postgrest.mjs
+scripts/diagnose-schema.mjs
+scripts/openapi-*.mjs
+scripts/*-401*.mjs
+scripts/*-e2e-*.mjs
+scripts/final-e2e.mjs
+scripts/check-api-schema.mjs
+scripts/debug-*.mjs
+
 # local env files
 .env
 .env*.local
+
+# local runtime/temp
+supabase/.temp/
+infra/mediamtx/.gcp-vps-tunnel.log
+infra/mediamtx/.gcp-vps-tunnel.pid
 
 # typescript
 *.tsbuildinfo
@@ -40,3 +97,44 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Firebase / secrets (nunca commitar)
+google-services.json
+google-services*.json
+*.service-account.json
+
+# infra: dependencias e artefatos de build local
+infra/**/node_modules/
+infra/**/.venv/
+infra/**/__pycache__/
+infra/**/*.pyc
+infra/mediamtx/state/
+infra/mediamtx/*.log
+
+# backups de sessao / restores temporarios (lixo dev, nao fazem parte do produto)
+.codex-restore-*/
+.codex-backup-*/
+.claude/
+.temp/
+**/*.bak
+
+# artefatos de empacotamento locais
+*.tar.gz
+*.tgz
+*.zip
+mini-pc-web-restore-20260415.tar.gz*
+chacara-lubuntu-kiosk-*.tar.gz
+docs/session-notes/
+scripts/*-probe*.mjs
+scripts/inspect-*.mjs
+scripts/*-debug*.mjs
+scripts/check-rest*.mjs
+scripts/openapi-*.mjs
+scripts/diagnose-*.mjs
+scripts/reload-*.mjs
+scripts/move-to-api*.mjs
+scripts/fix-api*.mjs
+scripts/debug-*.mjs
+scripts/test-*.mjs
+scripts/verify-*.mjs
+scripts/list-public-tables.mjs

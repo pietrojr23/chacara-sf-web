@@ -10,7 +10,7 @@ import {
   registerOwner,
   sendResetPasswordEmail,
 } from '../services/authService';
-import { getUserProfile } from '../services/firestoreService';
+import { getUserProfile, triggerAutomaticRentChatReminderIfNeeded } from '../services/firestoreService';
 import { registerForPushNotificationsAsync } from '../services/notificationService';
 import { cacheKeys, getCache, saveCache } from '../services/cacheService';
 
@@ -209,7 +209,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setLoading(false);
       }
 
-      void registerForPushNotificationsAsync(user.uid).catch(() => undefined);
+      void registerForPushNotificationsAsync(user.uid).catch((error) => {
+        if (__DEV__) {
+          console.warn('[push] falha ao registrar token de notificacao:', error);
+        }
+      });
     });
 
     return () => {
@@ -217,6 +221,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || !profile) {
+      return;
+    }
+
+    const runRentReminder = async () => {
+      try {
+        await triggerAutomaticRentChatReminderIfNeeded(profile.isOwner ? { ownerUserId: profile.id } : undefined);
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[rent-auto-reminder] falha ao processar lembrete automático:', error);
+        }
+      }
+    };
+
+    void runRentReminder();
+    const intervalId = setInterval(() => {
+      void runRentReminder();
+    }, 1000 * 60 * 60 * 6);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [firebaseUser, profile]);
 
   const value = useMemo<AuthContextData>(
     () => ({

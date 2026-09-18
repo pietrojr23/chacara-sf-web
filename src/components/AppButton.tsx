@@ -77,11 +77,12 @@ export const AppButton = ({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 46,
+    minHeight: 40,
     borderRadius: radii.md,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
   primary: {
     backgroundColor: palette.greenDark,
@@ -105,7 +106,7 @@ const styles = StyleSheet.create({
   },
   label: {
     color: palette.white,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   ghostLabel: {

@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     color: '#E2EEF9',
-    fontSize: 16,
+    fontSize: 15,
     lineHeight: 22,
     textShadowColor: 'rgba(0,0,0,0.35)',
     textShadowOffset: { width: 0, height: 1 },
