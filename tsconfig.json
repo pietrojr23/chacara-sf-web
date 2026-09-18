@@ -3,5 +3,6 @@
   "compilerOptions": {
     "strict": true
   },
-  "exclude": ["firebase/functions"]
+  "include": ["App.tsx", "index.ts", "src"],
+  "exclude": ["firebase/functions", "supabase/functions", "scripts/**/*.mjs", "node_modules"]
 }

@@ -544,7 +544,13 @@ export const CamerasScreen = () => {
                   }}
                   onError={(error) => {
                     console.warn('[Cameras] erro ao reproduzir stream externo:', error);
-                    const detail = typeof error === 'string' ? error : JSON.stringify(error);
+                    const rawError = error as unknown;
+                    const detail =
+                      typeof rawError === 'string'
+                        ? rawError
+                        : rawError && typeof rawError === 'object' && 'message' in rawError
+                          ? String((rawError as { message?: unknown }).message ?? '')
+                          : String(rawError ?? '');
                     const lower = detail.toLowerCase();
                     const isNotFound1100 = lower.includes('-1100') || lower.includes('error code -1100') || lower.includes('not found');
 

@@ -469,9 +469,9 @@ export const GateScreen = () => {
   const handleAction = async (
     statusOverride?: 'aberto' | 'fechado',
     options?: { showSuccessAlert?: boolean; showErrorAlert?: boolean },
-  ) => {
+  ): Promise<boolean> => {
     if (!profile || !authUid) {
-      return;
+      return false;
     }
 
     const showSuccessAlert = options?.showSuccessAlert ?? true;
@@ -491,7 +491,7 @@ export const GateScreen = () => {
           if (showErrorAlert) {
             Alert.alert('Acesso bloqueado', validation.message);
           }
-          return;
+          return false;
         }
         actionContext = {
           houseId: String(profile.casaId ?? '').trim() || undefined,
@@ -506,6 +506,7 @@ export const GateScreen = () => {
       if (showSuccessAlert) {
         Alert.alert('Portão', 'Comando enviado com sucesso.');
       }
+      return true;
     } catch (error) {
       const code = (error as { code?: string } | undefined)?.code;
       if (showErrorAlert) {
@@ -516,6 +517,7 @@ export const GateScreen = () => {
             : 'Falha ao acionar o portão. Verifique o webhook configurado.',
         );
       }
+      return false;
     } finally {
       setLoadingAction(null);
     }
@@ -796,8 +798,12 @@ export const GateScreen = () => {
                     onPress={async () => {
                       try {
                         setLoadingAction(`visitor:${visitor.id}`);
+                        const gateOpened = await handleAction('aberto');
+                        if (!gateOpened) {
+                          Alert.alert('Erro', 'Não foi possível abrir o portão. O visitante não foi liberado.');
+                          return;
+                        }
                         await withTimeout(updateVisitorStatus(visitor.id, 'Liberado'));
-                        await handleAction();
                         await withTimeout(loadVisitors());
                       } catch {
                         Alert.alert('Erro', 'Não foi possível liberar o visitante.');

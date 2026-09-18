@@ -75,12 +75,8 @@ export const HeadlightsConfigScreen = () => {
   }, [isOwner]);
 
   useEffect(() => {
-    const explicitConfigItems = Array.isArray(config.headlights)
-      ? config.headlights.map(toEditable)
-      : [];
-
-    if (explicitConfigItems.length > 0) {
-      setItems(explicitConfigItems);
+    if (Array.isArray(config.headlights)) {
+      setItems(config.headlights.map(toEditable));
       return;
     }
 
@@ -247,9 +243,15 @@ export const HeadlightsConfigScreen = () => {
             onChange={(checked) => {
               if (checked) {
                 updateItem(item.key, { casasPermitidas: [] });
-              } else if (houses.length) {
-                updateItem(item.key, { casasPermitidas: [houses[0].id] });
+                return;
               }
+
+              if (!houses.length) {
+                Alert.alert('Casas não carregadas', 'Aguarde o carregamento das casas para restringir o acesso.');
+                return;
+              }
+
+              updateItem(item.key, { casasPermitidas: [houses[0].id] });
             }}
           />
           {item.casasPermitidas.length > 0 ? (

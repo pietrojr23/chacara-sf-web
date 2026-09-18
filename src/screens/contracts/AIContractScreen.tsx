@@ -10,7 +10,17 @@ import { generateRentalContractWithGroq, type PersonContractData } from '../../s
 import { generateContractPdf, sharePdf } from '../../services/pdfService';
 
 const parseMoneyInput = (value: string) => {
-  const normalized = value.replace(/[^\d,.-]/g, '').replace(',', '.');
+  const cleaned = value.replace(/[^\d,.-]/g, '').trim();
+  if (!cleaned) {
+    return 0;
+  }
+
+  const normalized = cleaned.includes(',')
+    ? cleaned.replace(/\./g, '').replace(',', '.')
+    : /^\d{1,3}(\.\d{3})+$/.test(cleaned)
+      ? cleaned.replace(/\./g, '')
+      : cleaned;
+
   const result = Number(normalized);
   return Number.isFinite(result) && result > 0 ? result : 0;
 };

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { openApplication as openAndroidApplication } from 'expo-intent-launcher';
@@ -29,6 +30,7 @@ import { generateReceiptPdf, sharePdf } from '../../services/pdfService';
 import { cacheKeys, getCache, saveCache } from '../../services/cacheService';
 import { uploadFileAsync } from '../../services/storageService';
 import { House, RentalPayment } from '../../types/models';
+import { RootStackParamList } from '../../types/navigation';
 import { formatCurrencyBRL, formatDateBR } from '../../utils/format';
 import { getFileNameFromPath } from '../../utils/file';
 import { buildPrivateChatId } from '../../utils/chat';
@@ -273,6 +275,7 @@ export const FinanceScreen = () => {
   const { profile } = useAuth();
   const { config } = useAppConfig();
   const { dataVersion } = useDataSync();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const isOwner = Boolean(profile?.isOwner);
 
   const [houses, setHouses] = useState<House[]>([]);
@@ -970,7 +973,7 @@ export const FinanceScreen = () => {
       Alert.alert(
         'PIX não configurado',
         'O proprietário ainda não configurou a chave PIX nas configurações.',
-        [{ text: 'Fechar' }, { text: 'Abrir configurações', onPress: () => undefined }],
+        [{ text: 'Fechar' }, { text: 'Abrir configurações', onPress: () => navigation.navigate('Settings') }],
       );
       return;
     }

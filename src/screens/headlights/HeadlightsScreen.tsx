@@ -69,7 +69,12 @@ export const HeadlightsScreen = () => {
           setStateById((current) => ({ ...current, [headlightId]: nextState }));
         }
 
-        Alert.alert('Faróis', `${headlightName}: ${nextState === false ? 'desligado' : 'ligado'}.`);
+        Alert.alert(
+          'Faróis',
+          `${headlightName}: ${
+            nextState === false ? 'desligado' : nextState === true ? 'ligado' : 'comando enviado'
+          }.`,
+        );
       } catch (error) {
         const code = (error as { code?: string } | undefined)?.code;
         Alert.alert(

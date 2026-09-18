@@ -25,8 +25,8 @@ interface ContractPayload {
   contractText: string;
 }
 
-const escapeHtml = (value: string) =>
-  value
+const escapeHtml = (value: unknown) =>
+  String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -42,15 +42,15 @@ export const generateReceiptPdf = async ({ tenantName, houseName, payment, owner
     <html>
       <body style="font-family: Arial; padding: 24px; color: #1B1D1B;">
         <h1 style="color: #2D5A27;">${receiptTitle}</h1>
-        <p><strong>Inquilino:</strong> ${tenantName}</p>
-        <p><strong>Casa:</strong> ${houseName}</p>
-        <p><strong>${competenceLabel}:</strong> ${payment.competencia}</p>
+        <p><strong>Inquilino:</strong> ${escapeHtml(tenantName)}</p>
+        <p><strong>Casa:</strong> ${escapeHtml(houseName)}</p>
+        <p><strong>${competenceLabel}:</strong> ${escapeHtml(payment.competencia)}</p>
         <p><strong>Valor:</strong> ${formatCurrencyBRL(payment.valor)}</p>
         <p><strong>Data do pagamento:</strong> ${formatDateBR(payment.dataPagamento)}</p>
-        <p><strong>Forma de pagamento:</strong> ${payment.formaPagamento ?? 'Nao informada'}</p>
+        <p><strong>Forma de pagamento:</strong> ${escapeHtml(payment.formaPagamento ?? 'Nao informada')}</p>
         <hr />
         <p style="margin-top: 32px;">Assinatura digital:</p>
-        <p style="font-weight: bold;">${ownerName}</p>
+        <p style="font-weight: bold;">${escapeHtml(ownerName)}</p>
       </body>
     </html>
   `;
@@ -73,15 +73,15 @@ export const generateChargePdf = async ({
     <html>
       <body style="font-family: Arial; padding: 24px; color: #1B1D1B;">
         <h1 style="color: #8A5B00;">Cobranca de Aluguel</h1>
-        <p><strong>Inquilino:</strong> ${tenantName}</p>
-        <p><strong>Casa:</strong> ${houseName}</p>
-        <p><strong>Competencia:</strong> ${competencia}</p>
+        <p><strong>Inquilino:</strong> ${escapeHtml(tenantName)}</p>
+        <p><strong>Casa:</strong> ${escapeHtml(houseName)}</p>
+        <p><strong>Competencia:</strong> ${escapeHtml(competencia)}</p>
         <p><strong>Valor em aberto:</strong> ${formatCurrencyBRL(valor)}</p>
-        <p><strong>Vencimento:</strong> ${dueDay ? `dia ${dueDay}` : 'Nao informado'}</p>
-        <p><strong>Chave Pix para pagamento:</strong> ${pixKey?.trim() ? pixKey : 'Nao configurada'}</p>
+        <p><strong>Vencimento:</strong> ${dueDay ? `dia ${escapeHtml(dueDay)}` : 'Nao informado'}</p>
+        <p><strong>Chave Pix para pagamento:</strong> ${escapeHtml(pixKey?.trim() ? pixKey : 'Nao configurada')}</p>
         <hr />
         <p style="margin-top: 32px;">Emitido por:</p>
-        <p style="font-weight: bold;">${ownerName}</p>
+        <p style="font-weight: bold;">${escapeHtml(ownerName)}</p>
         <p style="font-size: 12px; color: #666;">Data de emissao: ${formatDateBR(new Date().toISOString())}</p>
       </body>
     </html>

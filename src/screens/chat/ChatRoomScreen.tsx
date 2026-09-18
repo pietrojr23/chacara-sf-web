@@ -503,6 +503,12 @@ export const ChatRoomScreen = ({ route, navigation }: Props) => {
       if (recording) {
         void recording.stopAndUnloadAsync();
       }
+      void Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => undefined);
     };
   }, [recording]);
 
@@ -609,6 +615,12 @@ export const ChatRoomScreen = ({ route, navigation }: Props) => {
       recordingStartedAtRef.current = null;
       setRecording(null);
       setIsRecording(false);
+      void Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => undefined);
     }
   }, [recording]);
 

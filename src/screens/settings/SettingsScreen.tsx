@@ -250,6 +250,8 @@ export const SettingsScreen = () => {
     setTenantGateRequireBiometric(tenantGate?.defaultRequireBiometric ?? true);
   }, [config]);
 
+  const houseGateRulesKey = houses.map((house) => `${house.id}:${house.nome}`).join('|');
+
   useEffect(() => {
     if (!houses.length) {
       setHouseGateRules([]);
@@ -273,25 +275,36 @@ export const SettingsScreen = () => {
       }
     });
 
-    setHouseGateRules(
-      houses.map((house) => {
-        const houseRule = ruleMap.get(house.id);
-        return {
-          houseId: house.id,
-          houseName: house.nome || house.id,
-          enabled: houseRule?.enabled ?? tenantGate?.enabled ?? true,
-          windowStart: normalizeHm(houseRule?.windowStart, defaultStart),
-          windowEnd: normalizeHm(houseRule?.windowEnd, defaultEnd),
-          cooldownSeconds: toIntString(houseRule?.cooldownSeconds, Number(defaultCooldown), 0),
-          maxOpensPerDay: toIntString(houseRule?.maxOpensPerDay, Number(defaultDailyLimit), 1),
-          requireProximity: houseRule?.requireProximity ?? defaultRequireProximity,
-          maxDistanceMeters: toIntString(houseRule?.maxDistanceMeters, Number(defaultMaxDistance), 20),
-          requireBiometric: houseRule?.requireBiometric ?? defaultRequireBiometric,
-          accessPin: String(houseRule?.accessPin ?? ''),
-        };
-      }),
-    );
-  }, [config.tenantGateAccess, houses]);
+    const buildRule = (houseId: string, houseName: string): EditableGateHouseRule => {
+      const houseRule = ruleMap.get(houseId);
+      return {
+        houseId,
+        houseName,
+        enabled: houseRule?.enabled ?? tenantGate?.enabled ?? true,
+        windowStart: normalizeHm(houseRule?.windowStart, defaultStart),
+        windowEnd: normalizeHm(houseRule?.windowEnd, defaultEnd),
+        cooldownSeconds: toIntString(houseRule?.cooldownSeconds, Number(defaultCooldown), 0),
+        maxOpensPerDay: toIntString(houseRule?.maxOpensPerDay, Number(defaultDailyLimit), 1),
+        requireProximity: houseRule?.requireProximity ?? defaultRequireProximity,
+        maxDistanceMeters: toIntString(houseRule?.maxDistanceMeters, Number(defaultMaxDistance), 20),
+        requireBiometric: houseRule?.requireBiometric ?? defaultRequireBiometric,
+        accessPin: String(houseRule?.accessPin ?? ''),
+      };
+    };
+
+    setHouseGateRules((current) => {
+      const currentByHouseId = new Map(current.map((rule) => [rule.houseId, rule]));
+
+      return houses.map((house) => {
+        const existing = currentByHouseId.get(house.id);
+        if (existing) {
+          return { ...existing, houseName: house.nome || house.id };
+        }
+
+        return buildRule(house.id, house.nome || house.id);
+      });
+    });
+  }, [config.tenantGateAccess, houseGateRulesKey]);
 
   useEffect(() => {
     setAccountPhoto(profile?.photoURL ?? '');
@@ -406,6 +419,10 @@ export const SettingsScreen = () => {
       const parsedDefaultCooldown = Math.max(0, Math.trunc(Number(tenantGateCooldownSeconds) || 0));
       const parsedDefaultDailyLimit = Math.max(1, Math.trunc(Number(tenantGateMaxOpensPerDay) || 1));
       const parsedDefaultDistance = Math.max(20, Math.trunc(Number(tenantGateMaxDistanceMeters) || 20));
+      const parsedLatitude = latitude.trim() ? Number(latitude.replace(',', '.')) : Number.NaN;
+      const parsedLongitude = longitude.trim() ? Number(longitude.replace(',', '.')) : Number.NaN;
+      const fallbackLatitude = Number(config.latitude);
+      const fallbackLongitude = Number(config.longitude);
       const houseRulesPayload: GateHouseAccessRule[] = houseGateRules.map((rule) => ({
         houseId: rule.houseId,
         enabled: rule.enabled,
@@ -427,8 +444,8 @@ export const SettingsScreen = () => {
           gateWebhookUrl: gateWebhook.trim(),
           gateCloseWebhookUrl: gateWebhook.trim(),
           tarifaEnergia: Number(tarifaEnergia.replace(',', '.')) || 0,
-          latitude: Number(latitude) || 0,
-          longitude: Number(longitude) || 0,
+          latitude: Number.isFinite(parsedLatitude) ? parsedLatitude : fallbackLatitude,
+          longitude: Number.isFinite(parsedLongitude) ? parsedLongitude : fallbackLongitude,
           tenantGateAccess: {
             enabled: tenantGateAccessEnabled,
             defaultWindowStart: normalizeHm(tenantGateWindowStart, '06:00'),

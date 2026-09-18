@@ -121,7 +121,7 @@ export const TicketsScreen = () => {
   }, [statusFilter, tickets]);
 
   const statusSummary = useMemo(() => {
-    const initial = { total: filtered.length, pendente: 0, andamento: 0, concluido: 0 };
+    const initial = { total: filtered.length, pendente: 0, andamento: 0, concluido: 0, cancelado: 0 };
 
     return filtered.reduce((acc, ticket) => {
       if (ticket.status === 'Pendente') {
@@ -130,6 +130,8 @@ export const TicketsScreen = () => {
         acc.andamento += 1;
       } else if (ticket.status === 'Concluido') {
         acc.concluido += 1;
+      } else if (ticket.status === 'Cancelado') {
+        acc.cancelado += 1;
       }
 
       return acc;
@@ -318,6 +320,10 @@ export const TicketsScreen = () => {
           <Text style={styles.summaryLabel}>Concluídos</Text>
           <Text style={styles.summaryValue}>{statusSummary.concluido}</Text>
         </View>
+        <View style={styles.summaryPill}>
+          <Text style={styles.summaryLabel}>Cancelados</Text>
+          <Text style={styles.summaryValue}>{statusSummary.cancelado}</Text>
+        </View>
       </View>
       <AppSelect
         label="Filtrar por status"
@@ -333,7 +339,7 @@ export const TicketsScreen = () => {
     <ScreenContainer scroll={false}>
       <View style={styles.root}>
         <FlatList
-          data={loading ? [] : filtered}
+          data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderTicketItem}
           ListHeaderComponent={renderListHeader}
