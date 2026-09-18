@@ -41,7 +41,7 @@ const inferredUrl = inferredProjectRef ? `https://${inferredProjectRef}.supabase
 const supabaseUrl = configuredUrl || inferredUrl;
 const supabaseKey = configuredAnonKey || configuredPublishableKey;
 
-let client: SupabaseClient | null = null;
+let client: SupabaseClient<any, any, any> | null = null;
 
 const ensureSupabaseConfig = () => {
   const missing: string[] = [];
@@ -75,6 +75,8 @@ export const getSupabase = () => {
         // (#access_token=...) e o SDK precisa processá-lo automaticamente.
         detectSessionInUrl: Platform.OS === 'web',
       },
+      // As tabelas relacionais do app vivem no schema "api" (exposed schema do PostgREST).
+      db: { schema: 'api' },
     });
   }
 
@@ -105,6 +107,7 @@ export const createEphemeralSupabaseClient = () => {
       persistSession: false,
       detectSessionInUrl: false,
     },
+    db: { schema: 'api' },
   });
 };
 
