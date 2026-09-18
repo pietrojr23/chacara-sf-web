@@ -1,0 +1,4 @@
+{$PUBLIC_CAMERA_HOST} {
+  encode zstd gzip
+  reverse_proxy mediamtx:8888
+}

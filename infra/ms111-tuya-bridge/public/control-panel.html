@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Painel da Chácara</title>
+    <link rel="stylesheet" href="/control-panel.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <h1>Painel da Chácara</h1>
+        </div>
+        <div class="hero-actions">
+          <div class="status-stack">
+            <span class="status-pill" id="connection-pill">Pronto</span>
+          </div>
+          <button id="open-settings" class="ghost-button" type="button">Configurar</button>
+        </div>
+      </header>
+
+      <section class="layout-grid">
+        <article class="panel gate-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Entrada principal</h2>
+            </div>
+          </div>
+
+          <div class="cta-grid gate-ctas">
+            <button class="cta cta-gate-trigger" id="gate-trigger" type="button">
+              <span class="cta-label">Acionar portão</span>
+            </button>
+          </div>
+
+          <div class="feedback-card" id="gate-feedback">
+            <strong id="gate-feedback-text">Nenhum comando enviado ainda.</strong>
+          </div>
+        </article>
+
+        <article class="panel lights-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Iluminação</h2>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <button class="mini-button" id="lights-on-all" type="button">Acender todos</button>
+            <button class="mini-button dark" id="lights-off-all" type="button">Apagar todos</button>
+          </div>
+
+          <div class="lights-list" id="lights-list"></div>
+        </article>
+      </section>
+
+      <section class="panel console-panel">
+        <div class="panel-header compact">
+          <div>
+            <h2>Atividade</h2>
+          </div>
+        </div>
+        <div class="console" id="console"></div>
+      </section>
+    </main>
+
+    <dialog id="settings-dialog" class="settings-dialog">
+      <form method="dialog" class="settings-card" id="settings-form">
+        <div class="settings-header">
+          <div>
+            <h2>Painel de controle</h2>
+          </div>
+          <button type="button" class="ghost-button" id="close-settings">Fechar</button>
+        </div>
+
+        <label class="field">
+          <span>Base da API</span>
+          <input id="api-base" name="apiBase" type="url" placeholder="http://127.0.0.1:8787" />
+          <small>Se a página estiver no mesmo servidor da bridge, pode deixar como está.</small>
+        </label>
+
+        <label class="field">
+          <span>Chave da bridge</span>
+          <input id="api-key" name="apiKey" type="text" placeholder="BRIDGE_API_KEY" />
+          <small>Pode também abrir a página com <code>?k=SUA_CHAVE</code>.</small>
+        </label>
+
+        <label class="field">
+          <span>Device ID do portão (opcional)</span>
+          <input id="gate-device-id" name="gateDeviceId" type="text" placeholder="device_id opcional" />
+          <small>Use só se quiser sobrescrever o device padrão da bridge.</small>
+        </label>
+
+        <label class="field">
+          <span>Faróis</span>
+          <textarea
+            id="lights-config"
+            name="lightsConfig"
+            rows="6"
+            placeholder="Farol Entrada Chacara|bf34982d74bfeccf87av8b&#10;Farol lateral|outro_virtual_id"
+          ></textarea>
+          <small>Um item por linha no formato <code>Nome|virtual_id</code>.</small>
+        </label>
+
+        <div class="settings-actions">
+          <button class="mini-button" type="submit">Salvar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/control-panel.js"></script>
+  </body>
+</html>

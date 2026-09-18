@@ -13,10 +13,20 @@ rtspAddress: :8554
 hlsAddress: :8888
 apiAddress: :9997
 
+# DVRs (como Giga/Dahua) podem ficar alguns segundos sem pacotes.
+# Aumenta tolerancia para evitar quedas intermitentes de publish.
+readTimeout: 30s
+writeTimeout: 30s
+
 # Melhor para app mobile (deixa o HLS pronto continuamente)
 hlsAlwaysRemux: yes
 # Melhor compatibilidade com players Android (ExoPlayer/MediaPlayer)
 hlsVariant: mpegts
+# Segmentos curtos para reduzir atraso ponta-a-ponta.
+hlsSegmentDuration: 1s
+hlsSegmentCount: 6
+# Evita bloqueio de CORS em fallback WebView/player web.
+hlsAllowOrigins: ["*"]
 
 # Autenticacao interna (troque as senhas)
 authMethod: internal
@@ -36,11 +46,33 @@ authInternalUsers:
       - action: api
       - action: metrics
       - action: playback
+  # Usuario interno para o ffmpeg republicar stream otimizada.
+  - user: publisher
+    pass: publisher123
+    permissions:
+      - action: publish
+        path: "~^cam-.*$"
 
 # Uma path por camera
 # Troque RTSP de cada camera abaixo.
 paths:
   cam-casa-01-frente:
+    source: publisher
+  cam-casa-01-frente-raw:
     source: rtsp://pietrojr2:guglielmi007310899@192.168.1.28:554/stream2
+    sourceOnDemand: yes
+    rtspTransport: tcp
+
+  cam-portao:
+    source: publisher
+  cam-portao-raw:
+    source: 'rtsp://admin:Gug.007310899@192.168.1.5:554/cam/realmonitor?channel=1&subtype=1'
+    sourceOnDemand: yes
+    rtspTransport: tcp
+
+  cam-portao-canal-7:
+    source: publisher
+  cam-portao-canal-7-raw:
+    source: 'rtsp://admin:Gug.007310899@192.168.1.5:554/cam/realmonitor?channel=7&subtype=1'
     sourceOnDemand: yes
     rtspTransport: tcp

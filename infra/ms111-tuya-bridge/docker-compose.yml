@@ -1,0 +1,9 @@
+services:
+  ms111-tuya-bridge:
+    build: .
+    container_name: ms111-tuya-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8787:8787"

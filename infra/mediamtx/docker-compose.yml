@@ -11,3 +11,154 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     command: /mediamtx.yml
 
+  ffmpeg-cam-casa-01-frente-low:
+    image: lscr.io/linuxserver/ffmpeg:latest
+    container_name: ffmpeg-cam-casa-01-frente-low
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        while true; do
+          ffmpeg -hide_banner -loglevel warning \
+            -fflags nobuffer+genpts -flags low_delay \
+            -analyzeduration 500000 -probesize 32768 \
+            -rtsp_transport tcp \
+            -i rtsp://pietrojr2:guglielmi007310899@192.168.1.28:554/stream2 \
+            -an \
+            -c:v libx264 -preset veryfast -tune zerolatency \
+            -vf "scale=426:240,fps=7" \
+            -g 7 -keyint_min 7 -sc_threshold 0 -bf 0 \
+            -b:v 120k -maxrate 150k -bufsize 180k \
+            -pix_fmt yuv420p \
+            -f rtsp -rtsp_transport tcp \
+            rtsp://publisher:publisher123@mediamtx:8554/cam-casa-01-frente
+          sleep 2
+        done
+
+  ffmpeg-cam-portao-low:
+    image: lscr.io/linuxserver/ffmpeg:latest
+    container_name: ffmpeg-cam-portao-low
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        while true; do
+          ffmpeg -hide_banner -loglevel warning \
+            -fflags nobuffer+genpts+discardcorrupt -flags low_delay \
+            -analyzeduration 500000 -probesize 32768 \
+            -timeout 15000000 \
+            -use_wallclock_as_timestamps 1 \
+            -rtsp_transport tcp \
+            -i 'rtsp://admin:Gug.007310899@192.168.1.5:554/cam/realmonitor?channel=1&subtype=1' \
+            -an \
+            -c:v libx264 -preset veryfast -tune zerolatency \
+            -vf "scale=426:240,fps=7,setpts=N/(7*TB)" \
+            -g 7 -keyint_min 7 -sc_threshold 0 -bf 0 \
+            -b:v 120k -maxrate 150k -bufsize 180k \
+            -pix_fmt yuv420p \
+            -f rtsp -rtsp_transport tcp \
+            rtsp://publisher:publisher123@mediamtx:8554/cam-portao
+          sleep 2
+        done
+
+  ffmpeg-cam-portao-canal-7-low:
+    image: lscr.io/linuxserver/ffmpeg:latest
+    container_name: ffmpeg-cam-portao-canal-7-low
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        while true; do
+          ffmpeg -hide_banner -loglevel warning \
+            -fflags nobuffer+genpts+discardcorrupt -flags low_delay \
+            -analyzeduration 500000 -probesize 32768 \
+            -timeout 15000000 \
+            -use_wallclock_as_timestamps 1 \
+            -rtsp_transport tcp \
+            -i 'rtsp://admin:Gug.007310899@192.168.1.5:554/cam/realmonitor?channel=7&subtype=1' \
+            -an \
+            -c:v libx264 -preset veryfast -tune zerolatency \
+            -vf "scale=426:240,fps=7,setpts=N/(7*TB)" \
+            -g 7 -keyint_min 7 -sc_threshold 0 -bf 0 \
+            -b:v 120k -maxrate 150k -bufsize 180k \
+            -pix_fmt yuv420p \
+            -f rtsp -rtsp_transport tcp \
+            rtsp://publisher:publisher123@mediamtx:8554/cam-portao-canal-7
+          sleep 2
+        done
+  caddy:
+    image: caddy:2
+    container_name: caddy-mediamtx
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - ./.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-mediamtx
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    # Optional service: run only with --profile tunnel
+    profiles:
+      - tunnel
+    env_file:
+      - ./.env
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-quick-mediamtx
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    # Public URL instantanea (trycloudflare), sem DNS e sem painel.
+    profiles:
+      - quick
+    command: tunnel --no-autoupdate --url http://mediamtx:8888
+
+  gcp-vps-tunnel:
+    image: alpine:3.20
+    container_name: gcp-vps-tunnel
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    volumes:
+      - ${HOME}/.ssh/google_compute_engine:/root/.ssh/google_compute_engine:ro
+      - ${HOME}/.ssh/known_hosts:/root/.ssh/known_hosts
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        apk add --no-cache openssh-client autossh >/dev/null
+        touch /root/.ssh/known_hosts
+        autossh -M 0 -N \
+          -o ExitOnForwardFailure=yes \
+          -o ServerAliveInterval=30 \
+          -o ServerAliveCountMax=3 \
+          -o StrictHostKeyChecking=accept-new \
+          -i /root/.ssh/google_compute_engine \
+          -R 127.0.0.1:18888:host.docker.internal:8888 \
+          junior@34.151.223.146
+
+volumes:
+  caddy_data:
+  caddy_config:
