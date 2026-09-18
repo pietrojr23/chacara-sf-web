@@ -12,7 +12,7 @@ const json = (payload: unknown, status = 200) =>
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   const apiKey = Deno.env.get('GROQ_API_KEY');
