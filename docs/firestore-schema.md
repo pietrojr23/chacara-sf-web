@@ -3,7 +3,7 @@
 ## Coleções principais
 
 - `users/{userId}`: perfil do usuário, role, casaId, tokens push.
-- `casas/{casaId}`: cadastro de casa, inquilino, contrato.
+- `casas/{casaId}`: cadastro de casa e contrato.
 - `alugueis/{casaId}/pagamentos/{mes}`: status e histórico mensal de aluguel.
 - `chamados/{chamadoId}`: chamados de manutenção.
 - `avisos/{avisoId}`: mural de avisos.
